@@ -1,8 +1,32 @@
-torch>=2.0.0
-transformers>=4.45.0
-peft>=0.12.0
+# Core Deep Learning
+torch>=2.1.0
+torchvision
+torchaudio
+
+# HuggingFace Ecosystem
+transformers>=4.40.0
+datasets>=2.18.0
+accelerate>=0.28.0
+huggingface_hub
+
+# Parameter Efficient Fine-Tuning (QLoRA)
+peft>=0.10.0
 bitsandbytes>=0.43.0
-accelerate>=0.34.0
-sentencepiece
+
+# VLM & Image Processing
 pillow
-tensorboard
+opencv-python
+
+# Training Optimization
+unsloth
+
+# Utilities
+tqdm
+numpy
+pandas
+
+# Evaluation 
+scikit-learn
+
+# Experiment Tracking 
+wandb
