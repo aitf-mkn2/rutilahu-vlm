@@ -1,7 +1,7 @@
 model_name: Qwen/Qwen3-VL-8B-Instruct
-dataset_name: null
+dataset_name: lfixfey/mkn_vlm_dataset
 base_path: ""
-output_dir: outputs/exp_01
+output_dir: /content/drive/MyDrive/rutilahu-vlm/outputs_exp_01
 
 train_split: train
 val_split: validation
