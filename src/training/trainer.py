@@ -473,33 +473,34 @@ class VLMExperimentTrainer:
             {"best_model_checkpoint": self.trainer.state.best_model_checkpoint},
             self.logs_dir / "best_checkpoint.json",
         )
+        self._push_to_hub()
 
-def _push_to_hub(self):
-    repo_id = self.cfg.get("hf_repo_id")
-    if not repo_id:
-        logger.info("hf_repo_id tidak diset, upload ke Hugging Face dilewati.")
-        return
+    def _push_to_hub(self):
+        repo_id = self.cfg.get("hf_repo_id")
+        if not repo_id:
+            logger.info("hf_repo_id tidak diset, upload ke Hugging Face dilewati.")
+            return
 
-    private = bool(self.cfg.get("hf_private", False))
+        private = bool(self.cfg.get("hf_private", False))
 
-    try:
-        create_repo(repo_id, exist_ok=True, private=private)
+        try:
+            create_repo(repo_id, exist_ok=True, private=private)
 
-        logger.info(f"Upload model ke Hugging Face Hub: {repo_id}")
+            logger.info(f"Upload model ke Hugging Face Hub: {repo_id}")
 
-        self.trainer.model.push_to_hub(
-            repo_id,
-            commit_message="Upload LoRA adapter"
-        )
-        self.processor.push_to_hub(
-            repo_id,
-            commit_message="Upload processor"
-        )
+            self.trainer.model.push_to_hub(
+                repo_id,
+                commit_message="Upload LoRA adapter"
+            )
+            self.processor.push_to_hub(
+                repo_id,
+                commit_message="Upload processor"
+            )
 
-        logger.info("Upload ke Hugging Face Hub selesai.")
+            logger.info("Upload ke Hugging Face Hub selesai.")
 
-    except Exception as e:
-        logger.error(f"Gagal upload ke Hugging Face: {e}")  
+        except Exception as e:
+            logger.error(f"Gagal upload ke Hugging Face: {e}")  
 
     def train(self):
         trainer = self._build_trainer()
