@@ -102,34 +102,44 @@ class VLMFormatter:
 
     # 5. Label Masking
     def _create_labels(self, input_ids, user_ids):
-        # Salin input_ids sebagai dasar labels
         labels = input_ids.clone()
+        tokenizer = self.processor.tokenizer
 
-        # Cari token assistant
-        assistant_token = "<|assistant|>"
-        assistant_token_ids = self.processor.tokenizer(
-            assistant_token,
-            add_special_tokens=False
-        )["input_ids"]
+        assistant_candidates = [
+            "<|im_start|>assistant",  
+            "<|assistant|>",          
+            "assistant"
+        ]
 
-        # Cari posisi assistant di input_ids
         start_idx = None
-        for i in range(len(input_ids) - len(assistant_token_ids)):
-            if input_ids[i:i+len(assistant_token_ids)].tolist() == assistant_token_ids:
-                start_idx = i + len(assistant_token_ids)
+
+        for candidate in assistant_candidates:
+            token_ids = tokenizer(candidate, add_special_tokens=False)["input_ids"]
+
+            for i in range(len(input_ids) - len(token_ids) + 1):
+                if input_ids[i:i+len(token_ids)].tolist() == token_ids:
+                    start_idx = i + len(token_ids)
+                    print(f"[DEBUG] Found assistant token: {candidate}")
+                    break
+
+            if start_idx is not None:
                 break
 
         if start_idx is None:
-            raise ValueError("Assistant token tidak ditemukan! Template mismatch.")
+            print("WARNING! Assistant token tidak ditemukan!")
+            print("WARNING! Using fallback user_ids (might be inaccurate)")           
+            start_idx = min(len(user_ids), len(input_ids) - 1)
 
-        # Mask semua sebelum assistant
         labels[:start_idx] = -100
 
-        # Mask padding
-        pad_id = self.processor.tokenizer.pad_token_id
+        pad_id = tokenizer.pad_token_id
         if pad_id is not None:
             labels[input_ids == pad_id] = -100
 
+        unmasked = (labels != -100).sum().item()
+        if unmasked == 0:
+            print("ERROR! Semua label ter-mask! Model tidak akan belajar!")
+        
         return labels
 
     # 6. Final Output
