@@ -3,6 +3,7 @@ from PIL import Image
 import os
 import requests
 from io import BytesIO
+from huggingface_hub import hf_hub_download
 
 
 class VLMdataset:
@@ -19,7 +20,27 @@ class VLMdataset:
         """
          
         if dataset_name:
-            self.dataset = load_dataset(dataset_name, split=split)
+            filename_map = {
+                "train": "data/sft/train.jsonl",
+                "validation": "data/sft/val.jsonl",
+                "test": "data/sft/val.jsonl"   # nanti ganti pake test
+            }
+
+            if split not in filename_map:
+                raise ValueError(f"Split tidak dikenali: {split}")
+
+            file_path = hf_hub_download(
+                repo_id=dataset_name,
+                filename=filename_map[split],
+                repo_type="dataset"
+            )
+
+            self.dataset = load_dataset(
+                "json",
+                data_files={"train": file_path},
+                split="train"
+            )
+            
         elif data_path:
             self.dataset = load_dataset("json", data_files=data_path, split=split)
         else:
