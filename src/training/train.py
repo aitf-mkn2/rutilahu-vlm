@@ -1,6 +1,6 @@
 import argparse
 
-from trainer import VLMExperimentTrainer, load_and_merge_configs
+from .trainer import VLMExperimentTrainer, load_and_merge_configs
 
 
 def parse_args():
