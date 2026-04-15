@@ -23,7 +23,7 @@ class VLMdataset:
             filename_map = {
                 "train": "data/sft/train.jsonl",
                 "validation": "data/sft/val.jsonl",
-                "test": "data/sft/val.jsonl"   # nanti ganti pake test
+                "test": "data/sft/test.jsonl"   
             }
 
             if split not in filename_map:
