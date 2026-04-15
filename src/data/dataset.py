@@ -1,6 +1,8 @@
 from datasets import load_dataset
 from PIL import Image
 import os
+import requests
+from io import BytesIO
 
 
 class VLMdataset:
@@ -18,32 +20,78 @@ class VLMdataset:
          
         if dataset_name:
             self.dataset = load_dataset(dataset_name, split=split)
-        else:
+        elif data_path:
             self.dataset = load_dataset("json", data_files=data_path, split=split)
-
+        else:
+            raise ValueError("Harus isi dataset_name atau data_path")
+        
+        self.dataset_name = dataset_name
         self.base_path = base_path
+        self.image_cache = {}
 
     def __len__(self):
         return len(self.dataset)
     
     def _resolve_image_path(self, img_path):
+        """
+        Handle berbagai format path:
+        - Windows path (..\\data\\...)
+        - HF relative path
+        - filename only
+        """
+
+        # normalize path
+        img_path = img_path.replace("\\", "/")
+
         filename = os.path.basename(img_path)
 
-        # mapping folder berdasarkan nama file
-        if "multi" in filename:
-            folder = "multi_images"
-        elif "ext" in filename:
-            folder = "single_images_exterior"
-        elif "int" in filename:
-            folder = "single_images_interior"
+        # Mapping berdasarkan folder HF 
+        if "rlh_ext" in img_path:
+            folder = "data/mkn_img/rlh_ext"
+        elif "rlh_int" in img_path:
+            folder = "data/mkn_img/rlh_int"
+        elif "rth_ext" in img_path:
+            folder = "data/mkn_img/rth_ext"
+        elif "rth_int" in img_path:
+            folder = "data/mkn_img/rth_int"
         else:
-            raise ValueError(f"Tidak bisa menentukan folder untuk: {filename}")
+            raise ValueError(f"Tidak bisa menentukan folder untuk: {img_path}")
 
+        # Build full path
         if self.base_path:
             return os.path.join(self.base_path, folder, filename)
         else:
             return os.path.join(folder, filename)
+        
 
+    # Remote Image Loader
+    def _load_image_from_url(self, img_path):
+        """
+        Load image langsung dari Hugging Face (remote)
+        """
+
+        img_path = img_path.replace("\\", "/")   # ubah ke slash
+        img_path = img_path.replace("../", "")   # hilangkan ../
+        img_path = img_path.lstrip("/")          # hilangkan leading /
+
+        if img_path in self.image_cache:
+            return self.image_cache[img_path]
+
+        url = f"https://huggingface.co/datasets/{self.dataset_name}/resolve/main/{img_path}"
+
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            img = Image.open(BytesIO(response.content)).convert("RGB")
+
+            self.image_cache[img_path] = img  
+
+            return img
+
+        except Exception as e:
+            raise ValueError(f"Gagal load image dari URL: {url} | {e}")
+        
     def __getitem__(self, idx):
         sample = self.dataset[idx]
 
@@ -63,14 +111,22 @@ class VLMdataset:
 
                 # handle path & HF image
                 if isinstance(img, str):
-                    img_path = self._resolve_image_path(img)
-                    try:
-                        img = Image.open(img_path).convert("RGB")
-                    except Exception as e:
-                        raise ValueError(f"Gagal load image: {img_path} | {e}")
 
+                    # HF REMOTE
+                    if self.dataset_name:
+                        img = self._load_image_from_url(img)
+
+                    # LOCAL
+                    else:
+                        img_path = self._resolve_image_path(img)
+                        try:
+                            img = Image.open(img_path).convert("RGB")
+                        except Exception as e:
+                            raise ValueError(f"Gagal load image: {img_path} | {e}")
+
+                # HANDLE PIL IMAGE (HF native)
                 elif isinstance(img, Image.Image):
-                    pass  
+                    pass
 
                 else:
                     raise ValueError(f"Format image tidak dikenali: {type(img)}")
