@@ -9,42 +9,36 @@ class VLMCollator:
         """
         Collator untuk menggabungkan multiple formatted samples menjadi batch.
 
-        Args:
-            device (str | None):
-                - None → biarkan trainer handle (RECOMMENDED)
-                - "cuda"/"cpu" → manual device control
+        Menggabungkan beberapa sample menjadi satu batch.
+        Bisa langsung dipindahkan ke device (cuda/cpu) jika diperlukan.
         """
         self.device = device
 
     def __call__(self, batch: list) -> dict:
         """
-        Args:
-            batch: list of formatted samples dari formatter
-
-        Returns:
-            dict: batch tensor siap untuk model
+        batch berisi list hasil dari formatter
         """
 
-        # 1. VALIDASI INPUT
+        # 1. Validasi field wajib
         required = {"input_ids", "attention_mask", "labels"}
         for i, item in enumerate(batch):
             missing = required - set(item.keys())
             if missing:
                 raise ValueError(f"Sample {i} missing fields: {missing}")
 
-        # 2. TEXT TENSORS (STACK)
+        # 2. Gabungkan token teks menjadi batch
         input_ids = torch.stack([item["input_ids"] for item in batch])
         attention_mask = torch.stack([item["attention_mask"] for item in batch])
         labels = torch.stack([item["labels"] for item in batch])
 
-        # optional: mm_token_type_ids (Qwen biasanya ada)
+        # Token multimodal versi QwenVL
         mm_token_type_ids = None
         if "mm_token_type_ids" in batch[0]:
             mm_token_type_ids = torch.stack([
                 item["mm_token_type_ids"] for item in batch
             ])
 
-        # 3. IMAGE TENSORS
+        # 3. Gabungkan data gambar 
         pixel_values_list = [item["pixel_values"] for item in batch]
 
         try:
@@ -53,16 +47,16 @@ class VLMCollator:
             pixel_values = pixel_values_list
             logger.debug("pixel_values shape beda -> keep as list")
 
-        # 4. IMAGE GRID
+        # 4. Gabungkan informasi grid gambar
         image_grid_list = [item["image_grid_thw"] for item in batch]
 
         try:
             image_grid_thw = torch.stack(image_grid_list)
         except RuntimeError:
             image_grid_thw = image_grid_list
-            logger.debug("image_grid_thw shape beda → keep as list")
+            logger.debug("image_grid_thw shape beda -> keep as list")
 
-        # 5. BUILD BATCH
+        # 5. Menyusun dictionary batch
         batch_dict = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,

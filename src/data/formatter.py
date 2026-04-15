@@ -27,7 +27,8 @@ class VLMFormatter:
         user_text = self._apply_template([conversation[0]], is_training=False)
 
         # Tokenize full input (text + image) menjadi tensor untuk model
-        model_inputs, input_ids = self._tokenize_full(full_text, images)
+        model_inputs = self._tokenize(full_text, images)
+        input_ids = model_inputs["input_ids"].squeeze(0)
 
         # Tokenize user-only text untuk mengetahui panjang input user
         user_ids = self._tokenize_user(user_text)
@@ -48,15 +49,19 @@ class VLMFormatter:
         )
 
     # 2. Conversation
-    # Bangun struktur chat (user → assistant) dengan placeholder image + instruction
+    # Bangun struktur chat (user → assistant) dengan placeholder instruction
     def _build_conversation(self, images, instruction, output):
+        user_content = []
+
+        for _ in images:
+            user_content.append({"type": "image"})  
+
+        user_content.append({"type": "text", "text": instruction})
+
         return [
             {
                 "role": "user",
-                "content": [
-                    *[{"type": "image"} for _ in images],
-                    {"type": "text", "text": instruction},
-                ]
+                "content": user_content
             },
             {
                 "role": "assistant",
@@ -77,19 +82,18 @@ class VLMFormatter:
 
     # 4. Tokenization
     # Convert text + image menjadi tensor (input_ids, attention_mask, pixel_values)
-    def _tokenize_full(self, full_text, images):
+    def _tokenize(self, full_text, images):
         model_inputs = self.processor(
             text=full_text,
             images=images if images else None,
             return_tensors="pt",
-            padding="max_length",
+            padding="longest",
             truncation=True,
             max_length=self.max_length
         )
-        input_ids = model_inputs["input_ids"].squeeze(0)
-        return model_inputs, input_ids
+        return model_inputs
 
-    # Tokenize user-only text untuk menghitung panjang input user (boundary masking)
+
     def _tokenize_user(self, user_text):
         return self.processor.tokenizer(
             user_text,
@@ -101,13 +105,27 @@ class VLMFormatter:
         # Salin input_ids sebagai dasar labels
         labels = input_ids.clone()
 
-        # Tentukan panjang bagian user
-        user_len = len(user_ids)
+        # Cari token assistant
+        assistant_token = "<|assistant|>"
+        assistant_token_ids = self.processor.tokenizer(
+            assistant_token,
+            add_special_tokens=False
+        )["input_ids"]
 
-        # Mask bagian user (agar tidak dihitung dalam loss)
-        labels[:user_len] = -100
+        # Cari posisi assistant di input_ids
+        start_idx = None
+        for i in range(len(input_ids) - len(assistant_token_ids)):
+            if input_ids[i:i+len(assistant_token_ids)].tolist() == assistant_token_ids:
+                start_idx = i + len(assistant_token_ids)
+                break
 
-        # Mask padding (agar model tidak belajar dari token kosong)
+        if start_idx is None:
+            raise ValueError("Assistant token tidak ditemukan! Template mismatch.")
+
+        # Mask semua sebelum assistant
+        labels[:start_idx] = -100
+
+        # Mask padding
         pad_id = self.processor.tokenizer.pad_token_id
         if pad_id is not None:
             labels[input_ids == pad_id] = -100
