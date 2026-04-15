@@ -5,7 +5,6 @@ sft:
   per_device_eval_batch_size: 1
   gradient_accumulation_steps: 8
   learning_rate: 2e-5
-  early_stopping_patience: 3
   warmup_steps: 50
   lr_scheduler_type: cosine
   logging_steps: 10
@@ -17,8 +16,8 @@ sft:
   load_best_model_at_end: true
   metric_for_best_model: eval_loss
   greater_is_better: false
-  bf16: true
-  fp16: false
+  bf16: false
+  fp16: true
   optim: adamw_8bit
   max_grad_norm: 1.0
   dataloader_num_workers: 2
