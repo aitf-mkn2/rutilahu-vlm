@@ -1,15 +1,19 @@
+# rutilahu-vlm/src/training/trainer.py
+
 import json
 import logging
 import random
 from copy import deepcopy
 from dataclasses import fields
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import torch
 import yaml
 from torch.utils.data import Dataset
+
+from transformers import EarlyStoppingCallback
 
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastVisionModel
@@ -88,13 +92,71 @@ def save_yaml(obj: Any, path: str | Path) -> None:
         yaml.safe_dump(obj, f, allow_unicode=True, sort_keys=False)
 
 
+def _normalize_sft_keys(raw_sft_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalisasi key agar kompatibel lintas versi TRL/HF.
+    Contoh:
+    - evaluation_strategy -> eval_strategy (jika versi TRL memakai nama ini)
+    """
+    cfg = deepcopy(raw_sft_cfg)
+
+    valid_fields = {f.name for f in fields(SFTConfig)}
+
+    # Alias umum antar versi
+    if "evaluation_strategy" in cfg and "evaluation_strategy" not in valid_fields and "eval_strategy" in valid_fields:
+        cfg["eval_strategy"] = cfg.pop("evaluation_strategy")
+
+    # Jika versi lama masih memakai evaluation_strategy, biarkan saja
+    # dan buang eval_strategy jika tidak dikenali.
+    if "eval_strategy" in cfg and "eval_strategy" not in valid_fields and "evaluation_strategy" in valid_fields:
+        cfg["evaluation_strategy"] = cfg.pop("eval_strategy")
+
+    return cfg
+
+
 def _filter_sft_kwargs(raw_sft_cfg: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Ambil hanya key yang memang valid untuk SFTConfig.
-    Ini membuat YAML lebih aman: key lain akan diabaikan, bukan error.
+    Ambil hanya key yang valid untuk SFTConfig.
+    Key lain diabaikan agar config tetap aman terhadap perubahan versi.
     """
+    normalized = _normalize_sft_keys(raw_sft_cfg)
     valid_fields = {f.name for f in fields(SFTConfig)}
-    return {k: v for k, v in raw_sft_cfg.items() if k in valid_fields}
+    return {k: v for k, v in normalized.items() if k in valid_fields}
+
+
+def _validate_config(cfg: Dict[str, Any]) -> None:
+    """
+    Validasi config minimal sebelum training dimulai.
+    """
+    required_top_level = ["model_name", "output_dir"]
+    for key in required_top_level:
+        if key not in cfg or cfg[key] in (None, ""):
+            raise ValueError(f"Config wajib memiliki `{key}` yang tidak kosong.")
+
+    if "sft" in cfg and not isinstance(cfg["sft"], dict):
+        raise ValueError("Section `sft` pada YAML harus berupa dictionary.")
+
+    if "lora_r" in cfg and int(cfg["lora_r"]) <= 0:
+        raise ValueError("`lora_r` harus > 0.")
+
+    if "lora_alpha" in cfg and int(cfg["lora_alpha"]) <= 0:
+        raise ValueError("`lora_alpha` harus > 0.")
+
+    if "lora_dropout" in cfg:
+        dropout = float(cfg["lora_dropout"])
+        if not (0.0 <= dropout <= 1.0):
+            raise ValueError("`lora_dropout` harus di rentang 0.0 sampai 1.0.")
+
+    if "max_length" in cfg and int(cfg["max_length"]) <= 0:
+        raise ValueError("`max_length` harus > 0.")
+
+    if "dataset_name" not in cfg and not any(
+        cfg.get(k) for k in ["train_data_path", "validation_data_path", "test_data_path"]
+    ):
+        raise ValueError(
+            "Config harus berisi `dataset_name` atau minimal salah satu dari "
+            "`train_data_path` / `validation_data_path` / `test_data_path`."
+        )
 
 
 # =========================
@@ -102,7 +164,7 @@ def _filter_sft_kwargs(raw_sft_cfg: Dict[str, Any]) -> Dict[str, Any]:
 # =========================
 class VisionConversationDataset(Dataset):
     """
-    Output format:
+    Output:
     {
       "messages": [
         {"role": "user", "content": [...]},
@@ -137,9 +199,7 @@ class VisionConversationDataset(Dataset):
                 },
                 {
                     "role": "assistant",
-                    "content": [
-                        {"type": "text", "text": output}
-                    ],
+                    "content": [{"type": "text", "text": output}],
                 },
             ]
         }
@@ -150,7 +210,12 @@ class VisionConversationDataset(Dataset):
 # =========================
 class VLMExperimentTrainer:
     def __init__(self, config: Dict[str, Any]):
+        if not isinstance(config, dict):
+            raise ValueError("Config harus berupa dictionary.")
+
         self.cfg = config
+        _validate_config(self.cfg)
+
         self.seed = int(self.cfg.get("seed", 42))
         set_seed(self.seed)
 
@@ -194,7 +259,7 @@ class VLMExperimentTrainer:
             )
 
         raise ValueError(
-            "Config harus berisi dataset_name atau salah satu file path per split "
+            "Config harus berisi `dataset_name` atau salah satu file path per split "
             "(train_data_path / validation_data_path / test_data_path)."
         )
 
@@ -217,15 +282,28 @@ class VLMExperimentTrainer:
 
     def _build_model(self):
         load_in_4bit = bool(self.cfg.get("load_in_4bit", True))
-        use_gradient_checkpointing = "unsloth" if bool(self.cfg.get("gradient_checkpointing", True)) else False
+        use_gradient_checkpointing = (
+            "unsloth" if bool(self.cfg.get("gradient_checkpointing", True)) else False
+        )
 
-        model, processor = FastVisionModel.from_pretrained(
+        loaded = FastVisionModel.from_pretrained(
             model_name=self.model_name,
             max_seq_length=self.max_length,
             load_in_4bit=load_in_4bit,
             use_gradient_checkpointing=use_gradient_checkpointing,
             fast_inference=False,
         )
+
+        if isinstance(loaded, tuple) and len(loaded) == 2:
+            model, processor = loaded
+        else:
+            model = loaded
+            processor = getattr(loaded, "processor", None)
+            if processor is None:
+                raise RuntimeError(
+                    "FastVisionModel.from_pretrained tidak mengembalikan processor. "
+                    "Sesuaikan dengan versi Unsloth yang Anda pakai."
+                )
 
         self.model = model
         self.processor = processor
@@ -251,17 +329,25 @@ class VLMExperimentTrainer:
     def _build_sft_config(self) -> SFTConfig:
         """
         Semua parameter training dibaca dari section `sft` pada YAML.
+        Jika ada key penting di top-level, dipakai sebagai fallback.
         """
         sft_raw = deepcopy(self.cfg.get("sft", {}))
         if not isinstance(sft_raw, dict):
             raise ValueError("Section `sft` pada YAML harus berupa dictionary.")
 
-        # fallback dari top-level config jika belum didefinisikan di `sft`
+        # Fallback dari top-level config
         sft_raw.setdefault("output_dir", str(self.checkpoints_dir))
         sft_raw.setdefault("seed", self.seed)
         sft_raw.setdefault("run_name", self.cfg.get("run_name", self.output_dir.name))
+        sft_raw.setdefault("overwrite_output_dir", bool(self.cfg.get("overwrite_output_dir", True)))
+        sft_raw.setdefault("report_to", self.cfg.get("report_to", "none"))
+        sft_raw.setdefault("bf16", bool(self.cfg.get("bf16", True)))
+        sft_raw.setdefault("fp16", bool(self.cfg.get("fp16", False)))
+        sft_raw.setdefault("load_best_model_at_end", bool(self.cfg.get("load_best_model_at_end", True)))
+        sft_raw.setdefault("metric_for_best_model", self.cfg.get("metric_for_best_model", "eval_loss"))
+        sft_raw.setdefault("greater_is_better", bool(self.cfg.get("greater_is_better", False)))
 
-        # kalau key penting ada di top-level dan belum dimasukkan ke sft
+        # Fallback untuk key yang sering ditaruh di top-level
         for key in [
             "num_train_epochs",
             "per_device_train_batch_size",
@@ -276,6 +362,7 @@ class VLMExperimentTrainer:
             "save_total_limit",
             "save_strategy",
             "evaluation_strategy",
+            "eval_strategy",
             "load_best_model_at_end",
             "metric_for_best_model",
             "greater_is_better",
@@ -292,11 +379,29 @@ class VLMExperimentTrainer:
             if key in self.cfg and key not in sft_raw:
                 sft_raw[key] = self.cfg[key]
 
+        # Validasi tambahan untuk early stopping
+        patience = sft_raw.get("early_stopping_patience")
+        if patience is not None:
+            patience = int(patience)
+            if patience < 1:
+                raise ValueError("`early_stopping_patience` harus >= 1.")
+
+            # Early stopping butuh evaluasi berkala
+            eval_strategy = sft_raw.get("evaluation_strategy", sft_raw.get("eval_strategy", "steps"))
+            if eval_strategy == "no":
+                raise ValueError(
+                    "`early_stopping_patience` diset tetapi evaluation strategy = 'no'. "
+                    "Aktifkan `evaluation_strategy`/`eval_strategy`."
+                )
+
         filtered = _filter_sft_kwargs(sft_raw)
 
         unknown = sorted(set(sft_raw.keys()) - set(filtered.keys()))
         if unknown:
-            logger.warning(f"Key YAML berikut diabaikan karena bukan field SFTConfig: {unknown}")
+            logger.warning(
+                "Key YAML berikut diabaikan karena bukan field SFTConfig pada versi TRL ini: %s",
+                unknown,
+            )
 
         return SFTConfig(**filtered)
 
@@ -313,15 +418,27 @@ class VLMExperimentTrainer:
             completion_only_loss=True,
         )
 
-        # Versi TRL tertentu memakai `processing_class`, versi lain masih menerima `tokenizer`.
+        callbacks = []
+        patience = self.cfg.get("sft", {}).get("early_stopping_patience")
+        if patience is not None:
+            callbacks.append(
+                EarlyStoppingCallback(
+                    early_stopping_patience=int(patience)
+                )
+            )
+
         trainer_kwargs = dict(
             model=model,
             train_dataset=train_ds,
             eval_dataset=val_ds,
             data_collator=collator,
             args=sft_config,
+            callbacks=callbacks,
         )
 
+        # Fallback untuk perbedaan versi TRL:
+        # - sebagian versi pakai `processing_class`
+        # - sebagian versi pakai `tokenizer`
         try:
             trainer = SFTTrainer(
                 **trainer_kwargs,
