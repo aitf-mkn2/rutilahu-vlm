@@ -15,6 +15,7 @@ import yaml
 from torch.utils.data import Dataset
 
 from transformers import EarlyStoppingCallback
+from transformers import TrainerCallback
 
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastVisionModel
@@ -23,7 +24,6 @@ from unsloth.trainer import UnslothVisionDataCollator
 from src.data.dataset import VLMdataset
 
 logger = logging.getLogger(__name__)
-
 
 # =========================
 # Config helpers
@@ -205,6 +205,21 @@ class VisionConversationDataset(Dataset):
             ]
         }
 
+# Logger Training
+class CleanLoggerCallback(TrainerCallback):
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs and "loss" in logs:
+            step = state.global_step
+            epoch = state.epoch or 0
+            loss = float(logs["loss"])
+            lr = float(logs.get("learning_rate", 0))
+
+            print(
+                f"[Step {step:>3}] "
+                f"Epoch {epoch:.2f} | "
+                f"Loss {loss:.4f} | "
+                f"LR {lr:.2e}"
+            )
 
 # =========================
 # Main trainer
@@ -421,12 +436,14 @@ class VLMExperimentTrainer:
 
         callbacks = []
         patience = self.cfg.get("sft", {}).get("early_stopping_patience")
+
         if patience is not None:
             callbacks.append(
                 EarlyStoppingCallback(
                     early_stopping_patience=int(patience)
                 )
             )
+        callbacks.append(CleanLoggerCallback())
 
         trainer_kwargs = dict(
             model=model,
@@ -442,14 +459,14 @@ class VLMExperimentTrainer:
         # - sebagian versi pakai `tokenizer`
         try:
             trainer = SFTTrainer(
-                **trainer_kwargs,
-                processing_class=self.processor,
-            )
+            **trainer_kwargs,
+            processing_class=self.processor,
+        )
         except TypeError:
             trainer = SFTTrainer(
-                **trainer_kwargs,
-                tokenizer=self.tokenizer,
-            )
+            **trainer_kwargs,
+            tokenizer=self.tokenizer,
+        )
 
         self.trainer = trainer
         self.test_dataset = test_ds
