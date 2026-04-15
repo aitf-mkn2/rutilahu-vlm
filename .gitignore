@@ -205,3 +205,31 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =====================
+# DATASET & MODEL (ML)
+# =====================
+
+# dataset (JANGAN DI-PUSH)
+data/
+
+# images
+*.jpg
+*.jpeg
+*.png
+
+# model checkpoint
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+
+# logs
+logs/
+wandb/
+
+# cache huggingface
+.cache/
+
+# test file
+test_*.py
