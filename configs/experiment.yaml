@@ -7,7 +7,7 @@ sft:
   learning_rate: 0.00002
   warmup_steps: 100
   lr_scheduler_type: cosine
-  logging_steps: 1
+  logging_steps: 10
   eval_steps: 50
   save_steps: 50
   save_total_limit: 3
