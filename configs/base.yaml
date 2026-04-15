@@ -1,0 +1,17 @@
+model_name: Qwen/Qwen3-VL-8B-Instruct
+dataset_name: null
+base_path: ""
+output_dir: outputs/exp_01
+
+train_split: train
+val_split: validation
+test_split: test
+use_test_split: true
+
+seed: 42
+report_to: none
+
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
+overwrite_output_dir: true

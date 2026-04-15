@@ -1,0 +1,13 @@
+load_in_4bit: true
+gradient_checkpointing: true
+
+finetune_vision_layers: false
+finetune_language_layers: true
+finetune_attention_modules: true
+finetune_mlp_modules: true
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_bias: none
+target_modules: all-linear
