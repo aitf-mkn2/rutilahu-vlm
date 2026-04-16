@@ -2,8 +2,8 @@ import json
 import re
 import os
 
-INPUT_PATH = "dataset/test.jsonl"
-OUTPUT_PATH = "data/references.jsonl"
+INPUT_PATH = "../dataset/test.jsonl"
+OUTPUT_PATH = "../data/references.jsonl"
 
 
 def extract_text(messages):
@@ -66,7 +66,7 @@ Lantai:
 - Material: {lantai_m}
 - Kondisi: {lantai_k}
 
-Konflik Dinding: {"Ya" if konflik else "Tidak"}
+Konflik Dinding: {"true" if konflik else "false"}
 
 Penjelasan:
 {penjelasan}

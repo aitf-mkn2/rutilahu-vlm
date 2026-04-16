@@ -20,7 +20,6 @@ except ImportError:
 
 # SECTION 4 — CLASSIFICATION METRICS
 
-
 def _safe_f1(y_true: list, y_pred: list, **kwargs) -> float:
     if not HAS_SKLEARN or not y_true:
         return 0.0

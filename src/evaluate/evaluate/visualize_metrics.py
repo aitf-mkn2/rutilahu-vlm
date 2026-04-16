@@ -150,12 +150,13 @@ def generate_visualizations(metrics, output_dir):
     labels = [k.replace("_", " ") for k in rule_keys if k in exp]
     values = [exp[k] for k in rule_keys if k in exp]
 
-    plt.figure(figsize=(3,2))
+    plt.figure(figsize=(6,4))
     plt.bar(labels, values)
 
     for i, v in enumerate(values):
         plt.text(i, v + 0.02, f"{v:.2f}", ha='center')
 
+    plt.xticks(rotation=20)  
     plt.ylim(0, 1)
     plt.title("Explanation Rules")
 
