@@ -3,7 +3,7 @@ import torch
 
 
 class VLMFormatter:
-    def __init__(self, model_name: str, max_length: int = 16384):
+    def __init__(self, model_name: str, max_length: int = 4096):
         # Load processor (tokenizer + image processor) sesuai model Qwen
         self.processor = AutoProcessor.from_pretrained(
             model_name,
