@@ -1,12 +1,5 @@
 model_name: Qwen/Qwen3-VL-8B-Instruct
-dataset_name: lfixfey/mkn_vlm_dataset
-base_path: ""
-output_dir: /content/drive/MyDrive/rutilahu-vlm/outputs_exp_01
-
-train_split: train
-val_split: validation
-test_split: test
-use_test_split: true
+output_dir: outputs_exp_full_vlm
 
 seed: 42
 report_to: none
@@ -16,5 +9,5 @@ metric_for_best_model: eval_loss
 greater_is_better: false
 overwrite_output_dir: true
 
-hf_repo_id: vierren/rutilahu-vlm-exp01
+hf_repo_id: vierren/rutilahu-vlm-exp02
 hf_private: false

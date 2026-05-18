@@ -1,0 +1,21 @@
+data:
+  source: local
+
+  train_jsonl: data/sft/train.jsonl
+  val_jsonl: data/sft/val.jsonl
+  test_jsonl: data/sft/test.jsonl
+
+  image_root: /content/drive/MyDrive/rutilahu-vlm/data/mkn_img
+
+  use_test_split: true
+
+  # CACHE
+  cache_images: true
+  cache_size: 128
+
+  # HF FALLBACK
+  dataset_name: lfixfey/mkn_vlm_dataset
+
+  hf_train_file: data/sft/train.jsonl
+  hf_val_file: data/sft/val.jsonl
+  hf_test_file: data/sft/test.jsonl
