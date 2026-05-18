@@ -5,7 +5,8 @@ data:
   val_jsonl: data/sft/val.jsonl
   test_jsonl: data/sft/test.jsonl
 
-  image_root: /content/drive/MyDrive/rutilahu-vlm/data/mkn_img
+  image_root_local: /data/mkn_img
+  image_root_drive: /content/drive/MyDrive/rutilahu-vlm/data/mkn_img
 
   use_test_split: true
 

@@ -211,7 +211,8 @@ __marimo__/
 # =====================
 
 # dataset (JANGAN DI-PUSH)
-data/
+/data/
+
 
 # images
 *.jpg
