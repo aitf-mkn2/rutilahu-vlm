@@ -12,14 +12,6 @@ CacheKey = Tuple[str, str]
 class ImageCache:
     """
     LRU cache sederhana untuk menyimpan PIL Image di RAM.
-
-    Key disarankan berbentuk:
-        (source_type, image_ref)
-
-    Contoh:
-        ("local", "rlh_ext/a.jpg")
-        ("hf", "data/mkn_img/rlh_ext/a.jpg")
-        ("url", "https://...")
     """
 
     def __init__(self, max_size: int = 128):
