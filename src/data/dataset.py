@@ -42,7 +42,7 @@ class MultimodalChatDataset:
         self.cache_images = cache_images
         self.cache_size = max(int(cache_size), 0)
         self.verify_images = verify_images
-        self.strict_validatsebenion = strict_validation
+        self.strict_validation = strict_validation
         self.debug_mode = debug_mode
 
         self.image_cache = (
@@ -64,17 +64,17 @@ class MultimodalChatDataset:
          
         if self.debug_mode:
             logger.info(
-                "VLMChatDataset initialized | split=%s | num_samples=%d | image_root=%s",
+                "MultimodalChatDataset initialized | split=%s | num_samples=%d | image_root=%s",
                 self.split,
                 len(self.dataset),
                 self.image_root,
             )
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.dataset)
     
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
         Ambil 1 sample raw lalu ubah image path menjadi PIL.Image
         tanpa mengubah urutan multimodal conversation.
@@ -169,6 +169,7 @@ class MultimodalChatDataset:
             role=role,
             idx=idx,
             message_idx=message_idx,
+            
         )
 
         processed_message = deepcopy(message)
@@ -183,24 +184,42 @@ class MultimodalChatDataset:
         message_idx: int,
     ) -> List[Dict[str, Any]]:
         """
-        Process content:
-        - string -> jadi satu item text
-        - list -> process satu per satu
+        Process seluruh content dalam satu message.
+        Harus berupa list of dict multimodal item.
+
+        Support:
+        - string text sederhana
+        - list multimodal item
         """
+        
         if isinstance(content, str):
             text = content.strip()
+
             if self.strict_validation and not text:
                 raise ValueError(
                     f"Sample index {idx}, message {message_idx} ({role}): text kosong."
                 )
-            return [{"type": "text", "text": text}]
 
+            return [
+                {
+                    "type": "text",
+                    "text": text,
+                }
+            ]
+
+        # Content multimodal wajib list
         if not isinstance(content, list):
             raise ValueError(
-                f"Sample index {idx}, message {message_idx} ({role}): `content` harus list atau string."
+                f"Sample index {idx}, message {message_idx} ({role}): `content` harus berupa list."
+            )
+
+        if len(content) == 0:
+            raise ValueError(
+                f"Sample index {idx}, message {message_idx} ({role}): `content` tidak boleh kosong."
             )
 
         processed_items: List[Dict[str, Any]] = []
+
         for content_idx, item in enumerate(content):
             processed_item = self._process_content_item(
                 item=item,
@@ -212,6 +231,7 @@ class MultimodalChatDataset:
             processed_items.append(processed_item)
 
         return processed_items
+        
     
     def _process_content_item(
         self,

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import logging
-from io import BytesIO
 from pathlib import Path
-from typing import Iterable, List, Optional, Union
+from typing import Optional, Union
 
 from PIL import Image
 
