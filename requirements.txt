@@ -31,3 +31,6 @@ scikit-learn
 
 # Experiment Tracking 
 wandb
+
+# Config
+PyYAML==6.0.3

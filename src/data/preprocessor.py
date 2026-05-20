@@ -4,7 +4,6 @@ from transformers import AutoProcessor
 import torch
 from PIL import Image
 
-from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 
