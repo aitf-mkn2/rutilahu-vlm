@@ -7,7 +7,7 @@ from trl import SFTConfig as TRLSFTConfig
 from trl import SFTTrainer
 
 import torch
-
+import wandb
 import gc
 import logging
 import shutil
@@ -292,26 +292,45 @@ def run_training(
     logger.info("Output dir: %s", output_dir)
     logger.info("Model: %s", cfg.base.model_name)
 
-    model, tokenizer = build_model_and_tokenizer(cfg)
-    train_dataset, eval_dataset = build_datasets(cfg)
-    trainer = build_trainer(cfg, model, tokenizer, train_dataset, eval_dataset)
+    wandb_project = "rutilahu-vlm"
+    if cfg.base.hf_repo_id:
+        wandb_project = cfg.base.hf_repo_id.split("/")[-1]
 
-    if getattr(cfg.experiment, "debug_first_batch", True):
-        inspect_first_batch(trainer)
-
-    trainer.train()
-
-    save_training_artifacts(
-        cfg=cfg,
-        trainer=trainer,
-        tokenizer=tokenizer,
-        base_yaml=base_yaml,
-        data_yaml=data_yaml,
-        experiment_yaml=experiment_yaml,
-        qlora_yaml=qlora_yaml,
+    wandb.init(
+        project=wandb_project,
+        name=cfg.experiment_name,
+        config={
+            "model_name": cfg.base.model_name,
+            "learning_rate": cfg.experiment.learning_rate,
+            "max_length": cfg.experiment.max_length,
+            "experiment_name": cfg.experiment_name,
+        },
     )
 
-    logger.info("Training selesai. Model dan tokenizer telah disimpan ke %s", output_dir)
+    try:
+        model, tokenizer = build_model_and_tokenizer(cfg)
+        train_dataset, eval_dataset = build_datasets(cfg)
+        trainer = build_trainer(cfg, model, tokenizer, train_dataset, eval_dataset)
+
+        if getattr(cfg.experiment, "debug_first_batch", True):
+            inspect_first_batch(trainer)
+
+        trainer.train()
+
+        save_training_artifacts(
+            cfg=cfg,
+            trainer=trainer,
+            tokenizer=tokenizer,
+            base_yaml=base_yaml,
+            data_yaml=data_yaml,
+            experiment_yaml=experiment_yaml,
+            qlora_yaml=qlora_yaml,
+        )
+
+        logger.info("Training selesai. Model dan tokenizer telah disimpan ke %s", output_dir)
+    finally:
+        wandb.finish()
+
     _cleanup()
 
 
