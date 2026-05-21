@@ -154,15 +154,17 @@ def build_datasets(cfg: AppConfig) -> Tuple[MultimodalChatDataset, Optional[Mult
     return train_dataset, eval_dataset
 
 
-def build_collator(model: torch.nn.Module, tokenizer: Any):
+def build_collator(model, processor, cfg):
     """
     Unsloth vision fine-tuning path.
     """
 
     return UnslothVisionDataCollator(
         model=model,
-        tokenizer=tokenizer,
-        assistant_only_loss=True,
+        processor=processor,
+        max_seq_length=cfg.experiment.max_length,
+        resize="min",
+        completion_only_loss=True,
     )
 
 
@@ -213,7 +215,7 @@ def build_trainer(
         report_to=_resolve_report_to(cfg),
         run_name=getattr(cfg.experiment, "run_name", None),
         seed=int(cfg.base.seed),
-        use_cache=False,
+        assistant_only_loss=True,
         gradient_checkpointing=bool(cfg.qlora.gradient_checkpointing),
         push_to_hub=bool(cfg.base.hf_repo_id),
         hub_model_id=cfg.base.hf_repo_id if cfg.base.hf_repo_id else None,
@@ -223,7 +225,11 @@ def build_trainer(
         max_steps=-1,
     )
 
-    data_collator = build_collator(model, tokenizer)
+    data_collator = build_collator(
+        model=model,
+        processor=tokenizer,
+        cfg=cfg,
+    )
 
     trainer = SFTTrainer(
         model=model,
