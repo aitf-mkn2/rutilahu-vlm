@@ -1,10 +1,12 @@
-import torch
-from trl import SFTConfig as TRLSFTConfig
-from trl import SFTTrainer
+from __future__ import annotations
+
 from unsloth import FastVisionModel
 from unsloth.trainer import UnslothVisionDataCollator
 
-from __future__ import annotations
+from trl import SFTConfig as TRLSFTConfig
+from trl import SFTTrainer
+
+import torch
 
 import gc
 import logging
