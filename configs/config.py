@@ -196,6 +196,37 @@ class SFTConfig:
     experiment: ExperimentConfig
     qlora: QLoRAConfig
 
+    @property
+    def experiment_name(self) -> str:
+        """
+        Auto-generate experiment name.
+
+        Example:
+        mkn2-qwen3vl8binstruct-lr2e5
+        """
+
+        model_name = self.base.model_name.split("/")[-1]
+
+        model_name = (
+            model_name.lower()
+            .replace("-", "")
+            .replace("_", "")
+        )
+
+        lr = self.experiment.learning_rate
+
+        lr_str = f"{lr:.0e}".replace("-", "")
+
+        return f"mkn2-{model_name}-lr{lr_str}"
+
+    @property
+    def image_root(self) -> str:
+        """
+        Active image root berdasarkan source dataset.
+        """
+
+        return self.data.image_roots[self.data.source]
+
     @classmethod
     def from_files(
         cls,
@@ -204,6 +235,7 @@ class SFTConfig:
         experiment_yaml: Union[str, Path],
         qlora_yaml: Union[str, Path],
     ) -> "SFTConfig":
+
         base_raw = _load_yaml(base_yaml)
         data_raw = _load_yaml(data_yaml)
         exp_raw = _load_yaml(experiment_yaml)
@@ -224,91 +256,208 @@ class SFTConfig:
             source=str(_require(data_section, "source", "data.data")),
             splits=dict(_require(data_section, "splits", "data.data")),
             image_roots=dict(_require(data_section, "image_roots", "data.data")),
-            use_test_split=bool(_require(data_section, "use_test_split", "data.data")),
-            cache_images=bool(_require(data_section, "cache_images", "data.data")),
-            cache_size=int(_require(data_section, "cache_size", "data.data")),
-            dataset_name=str(_require(data_section, "dataset_name", "data.data")),
-            hf_splits=dict(_require(data_section, "hf_splits", "data.data")),
+            use_test_split=bool(
+                _require(data_section, "use_test_split", "data.data")
+            ),
+            cache_images=bool(
+                _require(data_section, "cache_images", "data.data")
+            ),
+            cache_size=int(
+                _require(data_section, "cache_size", "data.data")
+            ),
+            dataset_name=str(
+                _require(data_section, "dataset_name", "data.data")
+            ),
+            hf_splits=dict(
+                _require(data_section, "hf_splits", "data.data")
+            ),
         )
 
         experiment = ExperimentConfig(
-            max_length=int(_require(sft_section, "max_length", "experiment.sft")),
-            num_train_epochs=float(_require(sft_section, "num_train_epochs", "experiment.sft")),
+            max_length=int(sft_section.get("max_length", 4096)),
+            num_train_epochs=float(
+                _require(sft_section, "num_train_epochs", "experiment.sft")
+            ),
             per_device_train_batch_size=int(
-                _require(sft_section, "per_device_train_batch_size", "experiment.sft")
+                _require(
+                    sft_section,
+                    "per_device_train_batch_size",
+                    "experiment.sft",
+                )
             ),
             per_device_eval_batch_size=int(
-                _require(sft_section, "per_device_eval_batch_size", "experiment.sft")
+                _require(
+                    sft_section,
+                    "per_device_eval_batch_size",
+                    "experiment.sft",
+                )
             ),
             gradient_accumulation_steps=int(
-                _require(sft_section, "gradient_accumulation_steps", "experiment.sft")
+                _require(
+                    sft_section,
+                    "gradient_accumulation_steps",
+                    "experiment.sft",
+                )
             ),
-            learning_rate=float(_require(sft_section, "learning_rate", "experiment.sft")),
-            warmup_steps=int(_require(sft_section, "warmup_steps", "experiment.sft")),
-            lr_scheduler_type=str(_require(sft_section, "lr_scheduler_type", "experiment.sft")),
-            logging_steps=int(_require(sft_section, "logging_steps", "experiment.sft")),
-            eval_steps=int(_require(sft_section, "eval_steps", "experiment.sft")),
-            save_steps=int(_require(sft_section, "save_steps", "experiment.sft")),
-            save_total_limit=int(_require(sft_section, "save_total_limit", "experiment.sft")),
-            save_strategy=str(_require(sft_section, "save_strategy", "experiment.sft")),
-            evaluation_strategy=str(_require(sft_section, "evaluation_strategy", "experiment.sft")),
+            learning_rate=float(
+                _require(sft_section, "learning_rate", "experiment.sft")
+            ),
+            warmup_steps=int(
+                _require(sft_section, "warmup_steps", "experiment.sft")
+            ),
+            lr_scheduler_type=str(
+                _require(sft_section, "lr_scheduler_type", "experiment.sft")
+            ),
+            logging_steps=int(
+                _require(sft_section, "logging_steps", "experiment.sft")
+            ),
+            eval_steps=int(
+                _require(sft_section, "eval_steps", "experiment.sft")
+            ),
+            save_steps=int(
+                _require(sft_section, "save_steps", "experiment.sft")
+            ),
+            save_total_limit=int(
+                _require(sft_section, "save_total_limit", "experiment.sft")
+            ),
+            save_strategy=str(
+                _require(sft_section, "save_strategy", "experiment.sft")
+            ),
+            evaluation_strategy=str(
+                _require(
+                    sft_section,
+                    "evaluation_strategy",
+                    "experiment.sft",
+                )
+            ),
             load_best_model_at_end=bool(
-                _require(sft_section, "load_best_model_at_end", "experiment.sft")
+                _require(
+                    sft_section,
+                    "load_best_model_at_end",
+                    "experiment.sft",
+                )
             ),
             metric_for_best_model=str(
-                _require(sft_section, "metric_for_best_model", "experiment.sft")
+                _require(
+                    sft_section,
+                    "metric_for_best_model",
+                    "experiment.sft",
+                )
             ),
             greater_is_better=bool(
-                _require(sft_section, "greater_is_better", "experiment.sft")
+                _require(
+                    sft_section,
+                    "greater_is_better",
+                    "experiment.sft",
+                )
             ),
-            bf16=bool(_require(sft_section, "bf16", "experiment.sft")),
-            fp16=bool(_require(sft_section, "fp16", "experiment.sft")),
-            optim=str(_require(sft_section, "optim", "experiment.sft")),
-            max_grad_norm=float(_require(sft_section, "max_grad_norm", "experiment.sft")),
+            bf16=bool(
+                sft_section.get("bf16", True)
+            ),
+            fp16=bool(
+                sft_section.get("fp16", False)
+            ),
+            optim=str(
+                _require(sft_section, "optim", "experiment.sft")
+            ),
+            max_grad_norm=float(
+                _require(
+                    sft_section,
+                    "max_grad_norm",
+                    "experiment.sft",
+                )
+            ),
             dataloader_num_workers=int(
-                _require(sft_section, "dataloader_num_workers", "experiment.sft")
+                _require(
+                    sft_section,
+                    "dataloader_num_workers",
+                    "experiment.sft",
+                )
             ),
             remove_unused_columns=bool(
-                _require(sft_section, "remove_unused_columns", "experiment.sft")
+                sft_section.get("remove_unused_columns", False)
             ),
             overwrite_output_dir=bool(
-                _require(sft_section, "overwrite_output_dir", "experiment.sft")
+                sft_section.get("overwrite_output_dir", True)
             ),
-            report_to=_normalize_report_to(_require(sft_section, "report_to", "experiment.sft")),
+            report_to=_normalize_report_to(
+                sft_section.get("report_to", "none")
+            ),
             debug_first_batch=bool(
-                _require(sft_section, "debug_first_batch", "experiment.sft")
+                sft_section.get("debug_first_batch", False)
             ),
             run_name=sft_section.get("run_name"),
-            save_safetensors=bool(sft_section.get("save_safetensors", True)),
+            save_safetensors=bool(
+                sft_section.get("save_safetensors", True)
+            ),
         )
 
         qlora = QLoRAConfig(
-            load_in_4bit=bool(_require(qlora_raw, "load_in_4bit", "qlora.yaml")),
+            load_in_4bit=bool(
+                _require(qlora_raw, "load_in_4bit", "qlora.yaml")
+            ),
             gradient_checkpointing=bool(
-                _require(qlora_raw, "gradient_checkpointing", "qlora.yaml")
+                _require(
+                    qlora_raw,
+                    "gradient_checkpointing",
+                    "qlora.yaml",
+                )
             ),
             finetune_vision_layers=bool(
-                _require(qlora_raw, "finetune_vision_layers", "qlora.yaml")
+                _require(
+                    qlora_raw,
+                    "finetune_vision_layers",
+                    "qlora.yaml",
+                )
             ),
             finetune_language_layers=bool(
-                _require(qlora_raw, "finetune_language_layers", "qlora.yaml")
+                _require(
+                    qlora_raw,
+                    "finetune_language_layers",
+                    "qlora.yaml",
+                )
             ),
             finetune_attention_modules=bool(
-                _require(qlora_raw, "finetune_attention_modules", "qlora.yaml")
+                _require(
+                    qlora_raw,
+                    "finetune_attention_modules",
+                    "qlora.yaml",
+                )
             ),
             finetune_mlp_modules=bool(
-                _require(qlora_raw, "finetune_mlp_modules", "qlora.yaml")
+                _require(
+                    qlora_raw,
+                    "finetune_mlp_modules",
+                    "qlora.yaml",
+                )
             ),
-            lora_r=int(_require(qlora_raw, "lora_r", "qlora.yaml")),
-            lora_alpha=int(_require(qlora_raw, "lora_alpha", "qlora.yaml")),
-            lora_dropout=float(_require(qlora_raw, "lora_dropout", "qlora.yaml")),
-            lora_bias=str(_require(qlora_raw, "lora_bias", "qlora.yaml")),
+            lora_r=int(
+                _require(qlora_raw, "lora_r", "qlora.yaml")
+            ),
+            lora_alpha=int(
+                _require(qlora_raw, "lora_alpha", "qlora.yaml")
+            ),
+            lora_dropout=float(
+                _require(qlora_raw, "lora_dropout", "qlora.yaml")
+            ),
+            lora_bias=str(
+                _require(qlora_raw, "lora_bias", "qlora.yaml")
+            ),
             target_modules=_normalize_target_modules(
-                _require(qlora_raw, "target_modules", "qlora.yaml")
+                _require(
+                    qlora_raw,
+                    "target_modules",
+                    "qlora.yaml",
+                )
             ),
         )
 
-        return cls(base=base, data=data, experiment=experiment, qlora=qlora)
+        return cls(
+            base=base,
+            data=data,
+            experiment=experiment,
+            qlora=qlora,
+        )
 
     @property
     def model_name(self) -> str:
