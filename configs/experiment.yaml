@@ -26,3 +26,4 @@ sft:
   report_to: none
   dataset_num_proc: 1
   overwrite_output_dir: true
+  debug_first_batch: true
