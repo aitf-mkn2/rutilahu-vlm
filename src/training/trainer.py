@@ -1,547 +1,348 @@
-# rutilahu-vlm/src/training/trainer.py
-import unsloth
-import json
+from __future__ import annotations
+
+import gc
 import logging
-import random
-from copy import deepcopy
-from dataclasses import fields
+import shutil
 from pathlib import Path
-from typing import Any, Dict, Tuple
-from huggingface_hub import create_repo
+from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import torch
-import yaml
-from torch.utils.data import Dataset
-
-from transformers import EarlyStoppingCallback
-from transformers import TrainerCallback
-
-from trl import SFTConfig, SFTTrainer
+from trl import SFTConfig as TRLSFTConfig
+from trl import SFTTrainer
 from unsloth import FastVisionModel
 from unsloth.trainer import UnslothVisionDataCollator
 
-from src.data.dataset import VLMdataset
+from src.config.config import SFTConfig as AppConfig
+from src.data.dataset import MultimodalChatDataset
 
 logger = logging.getLogger(__name__)
-
-# =========================
-# Config helpers
-# =========================
-def _load_yaml(path: str) -> Dict[str, Any]:
-    path_obj = Path(path)
-    if not path_obj.exists():
-        raise FileNotFoundError(f"Config tidak ditemukan: {path}")
-
-    with path_obj.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    if not isinstance(data, dict):
-        raise ValueError(f"Root YAML harus dict: {path}")
-
-    return data
+logging.basicConfig(level=logging.INFO)
 
 
-def _deep_merge(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
-    out = deepcopy(base)
-    for k, v in update.items():
-        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-            out[k] = _deep_merge(out[k], v)
+def _resolve_output_dir(cfg: AppConfig) -> Path:
+    """
+    Prioritas:
+    1) experiment.output_dir jika ada
+    2) base.output_dir
+    """
+    exp_output_dir = getattr(cfg.experiment, "output_dir", None)
+    base_output_dir = getattr(cfg.base, "output_dir", None)
+
+    output_dir = exp_output_dir or base_output_dir
+    if not output_dir:
+        raise ValueError("Output directory tidak ditemukan di config.")
+
+    return Path(output_dir)
+
+
+def _resolve_report_to(cfg: AppConfig):
+    report_to = getattr(cfg.experiment, "report_to", None)
+    if report_to is None:
+        report_to = getattr(cfg.base, "report_to", None)
+
+    if not report_to:
+        return "none"
+    return report_to
+
+
+def _resolve_max_length(cfg: AppConfig) -> int:
+    max_length = getattr(cfg.experiment, "max_length", None)
+    if max_length is None:
+        max_length = getattr(cfg.base, "max_length", 4096)
+    return int(max_length)
+
+
+def _copy_yaml_configs_to_output(
+    output_dir: Path,
+    base_yaml: Path,
+    data_yaml: Path,
+    experiment_yaml: Path,
+    qlora_yaml: Path,
+) -> None:
+    """
+    Simpan snapshot YAML agar ikut terbawa ke output_dir / Hub.
+    """
+    config_dir = output_dir / "configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    for src in [base_yaml, data_yaml, experiment_yaml, qlora_yaml]:
+        if not src.exists():
+            raise FileNotFoundError(f"Config file tidak ditemukan: {src}")
+        shutil.copy2(src, config_dir / src.name)
+
+
+def _safe_cuda_report() -> str:
+    if not torch.cuda.is_available():
+        return "CPU only"
+
+    allocated = torch.cuda.memory_allocated() / (1024**3)
+    reserved = torch.cuda.memory_reserved() / (1024**3)
+    return f"allocated={allocated:.2f} GB | reserved={reserved:.2f} GB"
+
+
+def _cleanup() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def build_model_and_tokenizer(cfg: AppConfig) -> Tuple[torch.nn.Module, Any]:
+    """
+    Load Qwen-VL / vision model via Unsloth FastVisionModel.
+    """
+    max_length = _resolve_max_length(cfg)
+
+    model, tokenizer = FastVisionModel.from_pretrained(
+        model_name=cfg.base.model_name,
+        max_seq_length=max_length,
+        load_in_4bit=cfg.qlora.load_in_4bit,
+        use_gradient_checkpointing="unsloth" if cfg.qlora.gradient_checkpointing else False,
+    )
+
+    target_modules = cfg.qlora.target_modules or "all-linear"
+
+    model = FastVisionModel.get_peft_model(
+        model,
+        finetune_vision_layers=cfg.qlora.finetune_vision_layers,
+        finetune_language_layers=cfg.qlora.finetune_language_layers,
+        finetune_attention_modules=cfg.qlora.finetune_attention_modules,
+        finetune_mlp_modules=cfg.qlora.finetune_mlp_modules,
+        r=cfg.qlora.lora_r,
+        lora_alpha=cfg.qlora.lora_alpha,
+        lora_dropout=cfg.qlora.lora_dropout,
+        bias=cfg.qlora.lora_bias,
+        target_modules=target_modules,
+        random_state=cfg.base.seed,
+        max_seq_length=max_length,
+    )
+
+    model.config.use_cache = False
+    return model, tokenizer
+
+
+def build_datasets(cfg: AppConfig) -> Tuple[MultimodalChatDataset, Optional[MultimodalChatDataset]]:
+    """
+    Unsloth vision trainer bisa langsung makan dataset berisi messages + image object.
+    Jadi dataset training dipakai langsung di SFTTrainer.
+    """
+    train_dataset = MultimodalChatDataset(
+        data_path=cfg.data.splits,
+        split="train",
+        image_root=cfg.data.image_root,
+        cache_images=cfg.data.cache_images,
+        cache_size=cfg.data.cache_size,
+        verify_images=True,
+        strict_validation=True,
+        debug_mode=False,
+    )
+
+    eval_dataset = None
+    if "validation" in cfg.data.splits:
+        eval_dataset = MultimodalChatDataset(
+            data_path=cfg.data.splits,
+            split="validation",
+            image_root=cfg.data.image_root,
+            cache_images=cfg.data.cache_images,
+            cache_size=cfg.data.cache_size,
+            verify_images=True,
+            strict_validation=True,
+            debug_mode=False,
+        )
+
+    return train_dataset, eval_dataset
+
+
+def build_collator(model: torch.nn.Module, tokenizer: Any):
+    """
+    Unsloth vision fine-tuning path.
+    """
+
+    return UnslothVisionDataCollator(
+        model=model,
+        tokenizer=tokenizer,
+        assistant_only_loss=True,
+    )
+
+
+def build_trainer(
+    cfg: AppConfig,
+    model: torch.nn.Module,
+    tokenizer: Any,
+    train_dataset: MultimodalChatDataset,
+    eval_dataset: Optional[MultimodalChatDataset] = None,
+) -> SFTTrainer:
+    """
+    Bangun SFTTrainer untuk vision SFT.
+    """
+    has_eval = eval_dataset is not None
+    eval_strategy = getattr(cfg.experiment, "evaluation_strategy", "no") if has_eval else "no"
+
+    load_best = bool(getattr(cfg.experiment, "load_best_model_at_end", False) and has_eval)
+    if not has_eval and getattr(cfg.experiment, "load_best_model_at_end", False):
+        logger.warning("load_best_model_at_end dimatikan karena eval_dataset tidak tersedia.")
+
+    output_dir = _resolve_output_dir(cfg)
+
+    trainer_args = TRLSFTConfig(
+        output_dir=str(output_dir),
+        max_length=_resolve_max_length(cfg),
+        num_train_epochs=float(cfg.experiment.num_train_epochs),
+        per_device_train_batch_size=int(cfg.experiment.per_device_train_batch_size),
+        per_device_eval_batch_size=int(cfg.experiment.per_device_eval_batch_size),
+        gradient_accumulation_steps=int(cfg.experiment.gradient_accumulation_steps),
+        learning_rate=float(cfg.experiment.learning_rate),
+        warmup_steps=int(cfg.experiment.warmup_steps),
+        lr_scheduler_type=str(cfg.experiment.lr_scheduler_type),
+        logging_steps=int(cfg.experiment.logging_steps),
+        eval_strategy=eval_strategy,
+        eval_steps=int(cfg.experiment.eval_steps) if has_eval else None,
+        save_strategy=str(cfg.experiment.save_strategy),
+        save_steps=int(cfg.experiment.save_steps),
+        save_total_limit=int(cfg.experiment.save_total_limit),
+        load_best_model_at_end=load_best,
+        metric_for_best_model=str(cfg.experiment.metric_for_best_model) if load_best else None,
+        greater_is_better=bool(cfg.experiment.greater_is_better) if load_best else None,
+        bf16=bool(cfg.experiment.bf16),
+        fp16=bool(cfg.experiment.fp16),
+        optim=str(cfg.experiment.optim),
+        max_grad_norm=float(cfg.experiment.max_grad_norm),
+        dataloader_num_workers=int(cfg.experiment.dataloader_num_workers),
+        remove_unused_columns=False,  # penting untuk multimodal columns
+        report_to=_resolve_report_to(cfg),
+        run_name=getattr(cfg.experiment, "run_name", None),
+        seed=int(cfg.base.seed),
+        use_cache=False,
+        gradient_checkpointing=bool(cfg.qlora.gradient_checkpointing),
+        push_to_hub=bool(cfg.base.hf_repo_id),
+        hub_model_id=cfg.base.hf_repo_id if cfg.base.hf_repo_id else None,
+        hub_private_repo=bool(cfg.base.hf_private) if cfg.base.hf_repo_id else None,
+        hub_strategy="end" if cfg.base.hf_repo_id else "every_save",
+        save_safetensors=True,
+        max_steps=-1,
+    )
+
+    data_collator = build_collator(model, tokenizer)
+
+    trainer = SFTTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        args=trainer_args,
+    )
+
+    return trainer
+
+
+def inspect_first_batch(trainer: SFTTrainer) -> None:
+    """
+    Debug helper untuk memastikan batch multimodal keluar dengan shape yang benar.
+    """
+    dataloader = trainer.get_train_dataloader()
+    batch = next(iter(dataloader))
+
+    logger.info("First batch keys: %s", list(batch.keys()))
+    for key, value in batch.items():
+        if torch.is_tensor(value):
+            logger.info("%s shape: %s dtype=%s", key, tuple(value.shape), value.dtype)
         else:
-            out[k] = v
-    return out
+            logger.info("%s type: %s", key, type(value))
 
 
-def load_and_merge_configs(
-    base_config_path: str,
-    qlora_config_path: str,
-    exp_config_path: str,
-) -> Dict[str, Any]:
-    cfg = {}
-    cfg = _deep_merge(cfg, _load_yaml(base_config_path))
-    cfg = _deep_merge(cfg, _load_yaml(qlora_config_path))
-    cfg = _deep_merge(cfg, _load_yaml(exp_config_path))
-    return cfg
-
-
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
-
-
-def ensure_dir(path: str | Path) -> Path:
-    p = Path(path)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def save_json(obj: Any, path: str | Path) -> None:
-    path = Path(path)
-    ensure_dir(path.parent)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-
-
-def save_yaml(obj: Any, path: str | Path) -> None:
-    path = Path(path)
-    ensure_dir(path.parent)
-    with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(obj, f, allow_unicode=True, sort_keys=False)
-
-
-def _normalize_sft_keys(raw_sft_cfg: Dict[str, Any]) -> Dict[str, Any]:
+def save_training_artifacts(
+    cfg: AppConfig,
+    trainer: SFTTrainer,
+    tokenizer: Any,
+    base_yaml: Path,
+    data_yaml: Path,
+    experiment_yaml: Path,
+    qlora_yaml: Path,
+) -> None:
     """
-    Normalisasi key agar kompatibel lintas versi TRL/HF.
-    Contoh:
-    - evaluation_strategy -> eval_strategy (jika versi TRL memakai nama ini)
+    Simpan model, tokenizer/processor, dan snapshot YAML.
+    Jika push_to_hub=True dan hub_model_id terisi, save_model() akan memicu push ke Hub.
     """
-    cfg = deepcopy(raw_sft_cfg)
-
-    valid_fields = {f.name for f in fields(SFTConfig)}
-
-    # Alias umum antar versi
-    if "evaluation_strategy" in cfg and "evaluation_strategy" not in valid_fields and "eval_strategy" in valid_fields:
-        cfg["eval_strategy"] = cfg.pop("evaluation_strategy")
-
-    # Jika versi lama masih memakai evaluation_strategy, biarkan saja
-    # dan buang eval_strategy jika tidak dikenali.
-    if "eval_strategy" in cfg and "eval_strategy" not in valid_fields and "evaluation_strategy" in valid_fields:
-        cfg["evaluation_strategy"] = cfg.pop("eval_strategy")
-
-    return cfg
-
-
-def _filter_sft_kwargs(raw_sft_cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Ambil hanya key yang valid untuk SFTConfig.
-    Key lain diabaikan agar config tetap aman terhadap perubahan versi.
-    """
-    normalized = _normalize_sft_keys(raw_sft_cfg)
-    valid_fields = {f.name for f in fields(SFTConfig)}
-    return {k: v for k, v in normalized.items() if k in valid_fields}
-
-
-def _validate_config(cfg: Dict[str, Any]) -> None:
-    """
-    Validasi config minimal sebelum training dimulai.
-    """
-    required_top_level = ["model_name", "output_dir"]
-    for key in required_top_level:
-        if key not in cfg or cfg[key] in (None, ""):
-            raise ValueError(f"Config wajib memiliki `{key}` yang tidak kosong.")
-
-    if "sft" in cfg and not isinstance(cfg["sft"], dict):
-        raise ValueError("Section `sft` pada YAML harus berupa dictionary.")
-
-    if "lora_r" in cfg and int(cfg["lora_r"]) <= 0:
-        raise ValueError("`lora_r` harus > 0.")
-
-    if "lora_alpha" in cfg and int(cfg["lora_alpha"]) <= 0:
-        raise ValueError("`lora_alpha` harus > 0.")
-
-    if "lora_dropout" in cfg:
-        dropout = float(cfg["lora_dropout"])
-        if not (0.0 <= dropout <= 1.0):
-            raise ValueError("`lora_dropout` harus di rentang 0.0 sampai 1.0.")
-
-    if "max_length" in cfg and int(cfg["max_length"]) <= 0:
-        raise ValueError("`max_length` harus > 0.")
-
-    if "dataset_name" not in cfg and not any(
-        cfg.get(k) for k in ["train_data_path", "validation_data_path", "test_data_path"]
-    ):
-        raise ValueError(
-            "Config harus berisi `dataset_name` atau minimal salah satu dari "
-            "`train_data_path` / `validation_data_path` / `test_data_path`."
-        )
-
-
-# =========================
-# Dataset wrapper
-# =========================
-class VisionConversationDataset(Dataset):
-    """
-    Output:
-    {
-      "messages": [
-        {"role": "user", "content": [...]},
-        {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
-      ]
-    }
-    """
-
-    def __init__(self, raw_dataset: VLMdataset):
-        self.raw_dataset = raw_dataset
-
-    def __len__(self):
-        return len(self.raw_dataset)
-
-    def __getitem__(self, idx):
-        sample = self.raw_dataset[idx]
-        images = sample["images"]
-        instruction = sample["instruction"].strip()
-        output = sample["output"].strip()
-
-        user_content = []
-        for image in images:
-            user_content.append({"type": "image", "image": image})
-
-        user_content.append({"type": "text", "text": instruction})
-
-        return {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": user_content,
-                },
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": output}],
-                },
-            ]
-        }
-
-# Logger Training
-class CleanLoggerCallback(TrainerCallback):
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs and "loss" in logs:
-            step = state.global_step
-            epoch = state.epoch or 0
-            loss = float(logs["loss"])
-            lr = float(logs.get("learning_rate", 0))
-
-            print(
-                f"[Step {step:>3}] "
-                f"Epoch {epoch:.2f} | "
-                f"Loss {loss:.4f} | "
-                f"LR {lr:.2e}"
-            )
-
-# =========================
-# Main trainer
-# =========================
-class VLMExperimentTrainer:
-    def __init__(self, config: Dict[str, Any]):
-        if not isinstance(config, dict):
-            raise ValueError("Config harus berupa dictionary.")
-
-        self.cfg = config
-        _validate_config(self.cfg)
-
-        self.seed = int(self.cfg.get("seed", 42))
-        set_seed(self.seed)
-
-        self.model_name = self.cfg["model_name"]
-        self.output_dir = Path(self.cfg.get("output_dir", "outputs/exp_01"))
-        self.checkpoints_dir = ensure_dir(self.output_dir / "checkpoints")
-        self.logs_dir = ensure_dir(self.output_dir / "logs")
-        self.predictions_dir = ensure_dir(self.output_dir / "predictions")
-
-        self.max_length = int(self.cfg.get("max_length", 2048))
-        self.resume_from_checkpoint = self.cfg.get("resume_from_checkpoint")
-
-        self.train_split = self.cfg.get("train_split", "train")
-        self.val_split = self.cfg.get("val_split", "validation")
-        self.test_split = self.cfg.get("test_split", "test")
-
-        self.model = None
-        self.processor = None
-        self.tokenizer = None
-        self.trainer = None
-        self.test_dataset = None
-
-        save_yaml(self.cfg, self.output_dir / "config_snapshot.yaml")
-
-    def _resolve_dataset(self, split_name: str) -> VLMdataset:
-        base_path = self.cfg.get("base_path", "")
-
-        split_key = f"{split_name}_data_path"
-        if self.cfg.get(split_key):
-            return VLMdataset(
-                data_path=self.cfg[split_key],
-                split="train",
-                base_path=base_path,
-            )
-
-        if self.cfg.get("dataset_name"):
-            return VLMdataset(
-                dataset_name=self.cfg["dataset_name"],
-                split=split_name,
-                base_path=base_path,
-            )
-
-        raise ValueError(
-            "Config harus berisi `dataset_name` atau salah satu file path per split "
-            "(train_data_path / validation_data_path / test_data_path)."
-        )
-
-    def _build_datasets(self):
-        train_raw = self._resolve_dataset(self.train_split)
-        val_raw = self._resolve_dataset(self.val_split)
-
-        train_ds = VisionConversationDataset(train_raw)
-        val_ds = VisionConversationDataset(val_raw)
-
-        test_ds = None
-        if self.cfg.get("use_test_split", True):
-            try:
-                test_raw = self._resolve_dataset(self.test_split)
-                test_ds = VisionConversationDataset(test_raw)
-            except Exception as e:
-                logger.warning(f"Test split tidak dipakai: {e}")
-
-        return train_ds, val_ds, test_ds
-
-    def _build_model(self):
-        load_in_4bit = bool(self.cfg.get("load_in_4bit", True))
-        use_gradient_checkpointing = (
-            "unsloth" if bool(self.cfg.get("gradient_checkpointing", True)) else False
-        )
-
-        loaded = FastVisionModel.from_pretrained(
-            model_name=self.model_name,
-            max_seq_length=self.max_length,
-            load_in_4bit=load_in_4bit,
-            use_gradient_checkpointing=use_gradient_checkpointing,
-            fast_inference=False,
-        )
-
-        if isinstance(loaded, tuple) and len(loaded) == 2:
-            model, processor = loaded
-        else:
-            model = loaded
-            processor = getattr(loaded, "processor", None)
-            if processor is None:
-                raise RuntimeError(
-                    "FastVisionModel.from_pretrained tidak mengembalikan processor. "
-                    "Sesuaikan dengan versi Unsloth yang Anda pakai."
-                )
-
-        self.model = model
-        self.processor = processor
-        self.tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
-
-        target_modules = self.cfg.get("target_modules", "all-linear")
-
-        self.model = FastVisionModel.get_peft_model(
-            self.model,
-            finetune_vision_layers=bool(self.cfg.get("finetune_vision_layers", False)),
-            finetune_language_layers=bool(self.cfg.get("finetune_language_layers", True)),
-            finetune_attention_modules=bool(self.cfg.get("finetune_attention_modules", True)),
-            finetune_mlp_modules=bool(self.cfg.get("finetune_mlp_modules", True)),
-            r=int(self.cfg.get("lora_r", 16)),
-            lora_alpha=int(self.cfg.get("lora_alpha", 32)),
-            lora_dropout=float(self.cfg.get("lora_dropout", 0.05)),
-            bias=self.cfg.get("lora_bias", "none"),
-            target_modules=target_modules,
-        )
-
-        return self.model
-
-    def _build_sft_config(self) -> SFTConfig:
-        """
-        Semua parameter training dibaca dari section `sft` pada YAML.
-        Jika ada key penting di top-level, dipakai sebagai fallback.
-        """
-        sft_raw = deepcopy(self.cfg.get("sft", {}))
-        if not isinstance(sft_raw, dict):
-            raise ValueError("Section `sft` pada YAML harus berupa dictionary.")
-
-        # Fallback dari top-level config
-        sft_raw.setdefault("output_dir", str(self.checkpoints_dir))
-        sft_raw.setdefault("seed", self.seed)
-        sft_raw.setdefault("run_name", self.cfg.get("run_name", self.output_dir.name))
-        sft_raw.setdefault("overwrite_output_dir", bool(self.cfg.get("overwrite_output_dir", True)))
-        sft_raw.setdefault("report_to", self.cfg.get("report_to", "none"))
-        sft_raw.setdefault("bf16", bool(self.cfg.get("bf16", True)))
-        sft_raw.setdefault("fp16", bool(self.cfg.get("fp16", False)))
-        sft_raw.setdefault("load_best_model_at_end", bool(self.cfg.get("load_best_model_at_end", True)))
-        sft_raw.setdefault("metric_for_best_model", self.cfg.get("metric_for_best_model", "eval_loss"))
-        sft_raw.setdefault("greater_is_better", bool(self.cfg.get("greater_is_better", False)))
-
-        # Fallback untuk key yang sering ditaruh di top-level
-        for key in [
-            "num_train_epochs",
-            "per_device_train_batch_size",
-            "per_device_eval_batch_size",
-            "gradient_accumulation_steps",
-            "learning_rate",
-            "warmup_steps",
-            "lr_scheduler_type",
-            "logging_steps",
-            "eval_steps",
-            "save_steps",
-            "save_total_limit",
-            "save_strategy",
-            "evaluation_strategy",
-            "eval_strategy",
-            "load_best_model_at_end",
-            "metric_for_best_model",
-            "greater_is_better",
-            "bf16",
-            "fp16",
-            "optim",
-            "max_grad_norm",
-            "dataloader_num_workers",
-            "remove_unused_columns",
-            "report_to",
-            "dataset_num_proc",
-            "overwrite_output_dir",
-        ]:
-            if key in self.cfg and key not in sft_raw:
-                sft_raw[key] = self.cfg[key]
-
-        # Validasi tambahan untuk early stopping
-        patience = sft_raw.get("early_stopping_patience")
-        if patience is not None:
-            patience = int(patience)
-            if patience < 1:
-                raise ValueError("`early_stopping_patience` harus >= 1.")
-
-            # Early stopping butuh evaluasi berkala
-            eval_strategy = sft_raw.get("evaluation_strategy", sft_raw.get("eval_strategy", "steps"))
-            if eval_strategy == "no":
-                raise ValueError(
-                    "`early_stopping_patience` diset tetapi evaluation strategy = 'no'. "
-                    "Aktifkan `evaluation_strategy`/`eval_strategy`."
-                )
-
-        filtered = _filter_sft_kwargs(sft_raw)
-
-        unknown = sorted(set(sft_raw.keys()) - set(filtered.keys()))
-        if unknown:
-            logger.warning(
-                "Key YAML berikut diabaikan karena bukan field SFTConfig pada versi TRL ini: %s",
-                unknown,
-            )
-
-        return SFTConfig(**filtered)
-
-    def _build_trainer(self):
-        train_ds, val_ds, test_ds = self._build_datasets()
-        model = self._build_model()
-        sft_config = self._build_sft_config()
-
-        collator = UnslothVisionDataCollator(
-            model=model,
-            processor=self.processor,
-            max_seq_length=self.max_length,
-            resize="min",
-            completion_only_loss=True,
-        )
-
-        callbacks = []
-        patience = self.cfg.get("sft", {}).get("early_stopping_patience")
-
-        if patience is not None:
-            callbacks.append(
-                EarlyStoppingCallback(
-                    early_stopping_patience=int(patience)
-                )
-            )
-        callbacks.append(CleanLoggerCallback())
-
-        trainer_kwargs = dict(
-            model=model,
-            train_dataset=train_ds,
-            eval_dataset=val_ds,
-            data_collator=collator,
-            args=sft_config,
-            callbacks=callbacks,
-        )
-
-        # Fallback untuk perbedaan versi TRL:
-        # - sebagian versi pakai `processing_class`
-        # - sebagian versi pakai `tokenizer`
-        try:
-            trainer = SFTTrainer(
-            **trainer_kwargs,
-            processing_class=self.processor,
-        )
-        except TypeError:
-            trainer = SFTTrainer(
-            **trainer_kwargs,
-            tokenizer=self.tokenizer,
-        )
-
-        self.trainer = trainer
-        self.test_dataset = test_ds
-        return trainer
-
-    def _save_model_artifacts(self):
-        if self.trainer is None:
-            raise RuntimeError("Trainer belum dibuat.")
-
-        final_dir = ensure_dir(self.output_dir / "final_model")
-        best_dir = ensure_dir(self.output_dir / "best_model")
-
-        self.trainer.model.save_pretrained(str(final_dir))
-        self.processor.save_pretrained(str(final_dir))
-
-        self.trainer.model.save_pretrained(str(best_dir))
-        self.processor.save_pretrained(str(best_dir))
-
-        save_json(self.trainer.state.log_history, self.logs_dir / "train_log_history.json")
-        save_json(
-            {"best_model_checkpoint": self.trainer.state.best_model_checkpoint},
-            self.logs_dir / "best_checkpoint.json",
-        )
-        self._push_to_hub()
-
-    def _push_to_hub(self):
-        repo_id = self.cfg.get("hf_repo_id")
-        if not repo_id:
-            logger.info("hf_repo_id tidak diset, upload ke Hugging Face dilewati.")
-            return
-
-        private = bool(self.cfg.get("hf_private", False))
-
-        try:
-            create_repo(repo_id, exist_ok=True, private=private)
-
-            logger.info(f"Upload model ke Hugging Face Hub: {repo_id}")
-
-            self.trainer.model.push_to_hub(
-                repo_id,
-                commit_message="Upload LoRA adapter"
-            )
-            self.processor.push_to_hub(
-                repo_id,
-                commit_message="Upload processor"
-            )
-
-            logger.info("Upload ke Hugging Face Hub selesai.")
-
-        except Exception as e:
-            logger.error(f"Gagal upload ke Hugging Face: {e}")  
-
-    def train(self):
-        trainer = self._build_trainer()
-
-        logger.info("Mulai training...")
-        train_result = trainer.train(resume_from_checkpoint=self.resume_from_checkpoint)
-
-        train_metrics = train_result.metrics
-        train_metrics["train_samples"] = len(trainer.train_dataset)
-        save_json(train_metrics, self.logs_dir / "train_metrics.json")
-
-        logger.info("Evaluasi validation set...")
-        eval_metrics = trainer.evaluate()
-        save_json(eval_metrics, self.logs_dir / "eval_metrics.json")
-
-        self._save_model_artifacts()
-
-        if self.test_dataset is not None:
-            logger.info("Evaluasi test set...")
-            test_metrics = trainer.evaluate(eval_dataset=self.test_dataset)
-            save_json(test_metrics, self.logs_dir / "test_metrics.json")
-
-        logger.info(f"Selesai. Output tersimpan di {self.output_dir}")
-        return {
-            "train_metrics": train_metrics,
-            "eval_metrics": eval_metrics,
-        }
+    output_dir = _resolve_output_dir(cfg)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    _copy_yaml_configs_to_output(output_dir, base_yaml, data_yaml, experiment_yaml, qlora_yaml)
+
+    # Simpan tokenizer / processor agar inference bisa direload dengan benar.
+    if hasattr(tokenizer, "save_pretrained"):
+        tokenizer.save_pretrained(str(output_dir))
+
+    # save_model() juga akan memicu push ke Hub jika push_to_hub aktif.
+    trainer.save_model(str(output_dir))
+
+
+def run_training(
+    cfg: AppConfig,
+    base_yaml: Path,
+    data_yaml: Path,
+    experiment_yaml: Path,
+    qlora_yaml: Path,
+) -> None:
+    output_dir = _resolve_output_dir(cfg)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("CUDA status: %s", _safe_cuda_report())
+    logger.info("Output dir: %s", output_dir)
+    logger.info("Model: %s", cfg.base.model_name)
+
+    model, tokenizer = build_model_and_tokenizer(cfg)
+    train_dataset, eval_dataset = build_datasets(cfg)
+    trainer = build_trainer(cfg, model, tokenizer, train_dataset, eval_dataset)
+
+    if getattr(cfg.experiment, "debug_first_batch", True):
+        inspect_first_batch(trainer)
+
+    trainer.train()
+
+    save_training_artifacts(
+        cfg=cfg,
+        trainer=trainer,
+        tokenizer=tokenizer,
+        base_yaml=base_yaml,
+        data_yaml=data_yaml,
+        experiment_yaml=experiment_yaml,
+        qlora_yaml=qlora_yaml,
+    )
+
+    logger.info("Training selesai. Model dan tokenizer telah disimpan ke %s", output_dir)
+    _cleanup()
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base_yaml", type=str, default="configs/base.yaml")
+    parser.add_argument("--data_yaml", type=str, default="configs/data.yaml")
+    parser.add_argument("--experiment_yaml", type=str, default="configs/experiment.yaml")
+    parser.add_argument("--qlora_yaml", type=str, default="configs/qlora.yaml")
+    args = parser.parse_args()
+
+    base_yaml = Path(args.base_yaml)
+    data_yaml = Path(args.data_yaml)
+    experiment_yaml = Path(args.experiment_yaml)
+    qlora_yaml = Path(args.qlora_yaml)
+
+    cfg = AppConfig.from_files(
+        base_yaml=base_yaml,
+        data_yaml=data_yaml,
+        experiment_yaml=experiment_yaml,
+        qlora_yaml=qlora_yaml,
+    )
+
+    run_training(
+        cfg=cfg,
+        base_yaml=base_yaml,
+        data_yaml=data_yaml,
+        experiment_yaml=experiment_yaml,
+        qlora_yaml=qlora_yaml,
+    )
+
+
+if __name__ == "__main__":
+    main()

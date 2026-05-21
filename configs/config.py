@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
+import re
 
 
 def _load_yaml(path: Union[str, Path]) -> Dict[str, Any]:
@@ -55,6 +56,57 @@ def _normalize_target_modules(value: Any) -> List[str]:
         return [value]
 
     return list(value)
+
+    import re
+
+
+def simplify_model_name(model_name: str) -> str:
+    """
+    Convert model name menjadi short readable key.
+
+    Contoh:
+    Qwen/Qwen3-VL-8B-Instruct
+    -> qwen3vl8b
+    """
+
+    model_key = model_name.split("/")[-1]
+    model_key = model_key.lower()
+
+    model_key = model_key.replace("-instruct", "")
+    model_key = model_key.replace("-", "")
+
+    return model_key
+
+
+def format_learning_rate(lr: float) -> str:
+    """
+    Convert learning rate ke compact scientific notation.
+
+    Contoh:
+    0.00002 -> 2e5
+    """
+
+    scientific = f"{lr:.0e}"
+
+    # 2e-05 -> 2e5
+    scientific = scientific.replace("e-0", "e")
+    scientific = scientific.replace("e-", "e")
+
+    return scientific
+
+
+def build_experiment_name(cfg) -> str:
+    """
+    Build automatic experiment name.
+
+    Format:
+    mkn2-<base_model>-lr<learning_rate>
+    """
+
+    model_key = simplify_model_name(cfg.base.model_name)
+    lr_key = format_learning_rate(cfg.experiment.learning_rate)
+
+    return f"mkn2-{model_key}-lr{lr_key}"
 
 
 @dataclass(frozen=True)
