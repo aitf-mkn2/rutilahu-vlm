@@ -7,7 +7,7 @@ data:
     test: data/sft/test.jsonl
 
   image_roots:
-    local: /data/mkn_img
+    local: .
     drive: /content/drive/MyDrive/rutilahu-vlm/data/mkn_img
 
   use_test_split: true

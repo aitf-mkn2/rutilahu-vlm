@@ -1,18 +1,19 @@
 # Core Deep Learning
---extra-index-url https://download.pytorch.org/whl/cu130
-torch==2.10.0
-torchvision==0.25.0
-torchaudio==2.10.0
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
 
 # HuggingFace Ecosystem
-transformers>=4.40.0
+transformers>=4.51.0
 datasets>=2.18.0
-accelerate>=0.28.0
-huggingface_hub
+accelerate>=0.34.0
+huggingface_hub>=0.30.0
 
 # Parameter Efficient Fine-Tuning (QLoRA)
-peft>=0.18.0
-bitsandbytes>=0.49.0
+peft>=0.14.0
+bitsandbytes>=0.45.0
 
 # VLM & Image Processing
 pillow
@@ -21,15 +22,18 @@ opencv-python
 # Training Optimization
 unsloth
 
+# Training
+trl>=0.16.0
+
 # Utilities
 tqdm
 numpy
 pandas
 
-# Evaluation 
+# Evaluation
 scikit-learn
 
-# Experiment Tracking 
+# Experiment Tracking
 wandb
 
 # Config
