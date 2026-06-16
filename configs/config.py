@@ -105,6 +105,7 @@ class DataConfig:
 @dataclass(frozen=True)
 class ExperimentConfig:
     output_dir: str
+    run_name: str
     max_length: int
     num_train_epochs: float
     per_device_train_batch_size: int
@@ -131,7 +132,6 @@ class ExperimentConfig:
     overwrite_output_dir: bool
     report_to: List[str] = field(default_factory=list)
     debug_first_batch: bool = False
-    run_name: str
     save_safetensors: bool = True
 
 
