@@ -217,18 +217,17 @@ def build_trainer(
         optim=str(cfg.experiment.optim),
         max_grad_norm=float(cfg.experiment.max_grad_norm),
         dataloader_num_workers=int(cfg.experiment.dataloader_num_workers),
-        remove_unused_columns=False,  # penting untuk multimodal columns
+        remove_unused_columns=False,  
         report_to=_resolve_report_to(cfg),
         run_name=getattr(cfg.experiment, "run_name", None),
         seed=int(cfg.base.seed),
-        assistant_only_loss=True,
+        assistant_only_loss=False,
         gradient_checkpointing=bool(cfg.qlora.gradient_checkpointing),
         push_to_hub=bool(cfg.base.hf_repo_id),
         hub_model_id=cfg.base.hf_repo_id if cfg.base.hf_repo_id else None,
         hub_private_repo=bool(cfg.base.hf_private) if cfg.base.hf_repo_id else None,
         hub_strategy="end" if cfg.base.hf_repo_id else "every_save",
-        save_safetensors=True,
-        max_steps=-1,
+        max_steps=-1
     )
 
     data_collator = build_collator(
