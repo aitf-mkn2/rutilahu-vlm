@@ -10,7 +10,7 @@ data:
     drive: /content/drive/MyDrive/mkn2_img
 
   splits:
-    train: data/sft/train.jsonl
+    train: train_sft_final_sample.jsonl
     validation: data/sft/val.jsonl
     test: data/sft/test.jsonl
 

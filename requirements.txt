@@ -6,7 +6,7 @@ torchvision
 torchaudio
 
 # HuggingFace Ecosystem
-transformer
+transformers
 datasets
 accelerate
 huggingface_hub

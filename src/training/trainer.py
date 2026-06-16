@@ -124,11 +124,17 @@ def build_model_and_tokenizer(cfg: AppConfig) -> Tuple[torch.nn.Module, Any]:
 
 def build_datasets(cfg: AppConfig) -> Tuple[MultimodalChatDataset, Optional[MultimodalChatDataset]]:
     """
-    Unsloth vision trainer bisa langsung makan dataset berisi messages + image object.
+    Unsloth vision trainer bisa langsung memakai dataset berisi messages + image object.
     Jadi dataset training dipakai langsung di SFTTrainer.
     """
+
+    dataset_paths = {
+        split: str(Path(cfg.data.dataset_root) / filename)
+        for split, filename in cfg.data.splits.items()
+    }
+
     train_dataset = MultimodalChatDataset(
-        data_path=cfg.data.splits,
+        data_path=dataset_paths,
         split="train",
         image_root=cfg.data.image_root,
         cache_images=cfg.data.cache_images,
@@ -141,7 +147,7 @@ def build_datasets(cfg: AppConfig) -> Tuple[MultimodalChatDataset, Optional[Mult
     eval_dataset = None
     if "validation" in cfg.data.splits:
         eval_dataset = MultimodalChatDataset(
-            data_path=cfg.data.splits,
+            data_path=dataset_paths,
             split="validation",
             image_root=cfg.data.image_root,
             cache_images=cfg.data.cache_images,
