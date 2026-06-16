@@ -1,18 +1,18 @@
 data:
-  source: local
+  source: drive
 
   dataset_roots:
     local: .
-    drive: /content/drive/MyDrive/mkn_data_merged
+    drive: /content/drive/MyDrive/mkn_data_merged/sft_merged_sample
 
   image_roots:
     local: .
     drive: /content/drive/MyDrive/mkn2_img
 
   splits:
-    train: train_sft_final_sample.jsonl
-    validation: data/sft/val.jsonl
-    test: data/sft/test.jsonl
+    train: train_sft.jsonl
+    validation: val_sft.jsonl
+    test: eval_sft.jsonl
 
   use_test_split: true
 
