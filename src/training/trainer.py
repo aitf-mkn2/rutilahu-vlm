@@ -195,7 +195,7 @@ def build_trainer(
         per_device_eval_batch_size=int(cfg.experiment.per_device_eval_batch_size),
         gradient_accumulation_steps=int(cfg.experiment.gradient_accumulation_steps),
         learning_rate=float(cfg.experiment.learning_rate),
-        warmup_steps=int(cfg.experiment.warmup_steps),
+        warmup_ratio=float(cfg.experiment.warmup_ratio),
         lr_scheduler_type=str(cfg.experiment.lr_scheduler_type),
         logging_steps=int(cfg.experiment.logging_steps),
         eval_strategy=eval_strategy,
@@ -304,7 +304,7 @@ def run_training(
 
     wandb.init(
         project=wandb_project,
-        name=cfg.experiment_name,
+        name=cfg.experiment.run_name,
         config={
             "model_name": cfg.base.model_name,
             "learning_rate": cfg.experiment.learning_rate,

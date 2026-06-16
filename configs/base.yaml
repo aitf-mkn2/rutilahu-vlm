@@ -1,13 +1,4 @@
-model_name: Qwen/Qwen3-VL-8B-Instruct
-output_dir: outputs_exp_full_vlm
-
+model_name: alvinrifky/Qwen3.5-9B-AITF-CPT
 seed: 42
-report_to: wandb
-
-load_best_model_at_end: true
-metric_for_best_model: eval_loss
-greater_is_better: false
-overwrite_output_dir: true
-
-hf_repo_id: vierren/rutilahu-vlm-exp02
+hf_repo_id: vierren/mkn-sft-qwen3.5-9b-v0
 hf_private: false

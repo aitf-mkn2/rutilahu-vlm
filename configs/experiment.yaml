@@ -1,14 +1,15 @@
 sft:
-  output_dir: outputs/exp_01/checkpoints
+  run_name: mkn-sft-qwen3.5-9b-v0
+  output_dir: outputs/mkn-sft-qwen3.5-9b-v0
   max_length: 4096
   num_train_epochs: 3
-  per_device_train_batch_size: 2
-  per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 4
-  learning_rate: 0.00002
-  warmup_steps: 100
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0001
+  warmup_ratio: 0.05
   lr_scheduler_type: cosine
-  logging_steps: 10
+  logging_steps: 5
   eval_steps: 50
   save_steps: 50
   save_total_limit: 3
@@ -19,12 +20,11 @@ sft:
   greater_is_better: false
   bf16: true
   fp16: false
-  optim: adamw_8bit
+  optim: paged_adamw_8bit
   max_grad_norm: 1.0
-  dataloader_num_workers: 4
+  dataloader_num_workers: 16
   remove_unused_columns: false
   report_to: wandb
-  run_name: mkn2
   dataset_num_proc: 1
-  overwrite_output_dir: true
+  overwrite_output_dir: false
   debug_first_batch: true

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from dataclasses import replace
 
 from configs.config import SFTConfig
 from src.training.trainer import (
@@ -67,21 +66,15 @@ def main() -> None:
         qlora_yaml=qlora_yaml,
     )
 
-    experiment_name = cfg.experiment_name
-    hf_repo_id = f"vierren/{experiment_name}"
-
-    # Karena dataclass frozen, override dilakukan dengan replace()
-    cfg = replace(cfg, base=replace(cfg.base, hf_repo_id=hf_repo_id))
-
-    logger.info("Experiment name: %s", experiment_name)
+    logger.info("Experiment name: %s", cfg.experiment.run_name)
     logger.info("HF Repo ID: %s", cfg.base.hf_repo_id)
     logger.info("Config loaded successfully.")
     logger.info("Model name: %s", cfg.base.model_name)
-    logger.info("Output dir: %s", cfg.base.output_dir)
+    logger.info("Output dir: %s", cfg.experiment.output_dir)
     logger.info("Image root: %s", cfg.data.image_root)
     logger.info("Learning rate: %s", cfg.experiment.learning_rate)
 
-    Path(cfg.base.output_dir).mkdir(parents=True, exist_ok=True)
+    Path(cfg.experiment.output_dir).mkdir(parents=True, exist_ok=True)
 
     model, tokenizer = build_model_and_tokenizer(cfg)
     train_dataset, eval_dataset = build_datasets(cfg)

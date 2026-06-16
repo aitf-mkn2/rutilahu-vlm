@@ -1,14 +1,18 @@
 data:
   source: local
 
+  dataset_roots:
+    local: .
+    drive: /content/drive/MyDrive/mkn_data_merged
+
+  image_roots:
+    local: .
+    drive: /content/drive/MyDrive/mkn2_img
+
   splits:
     train: data/sft/train.jsonl
     validation: data/sft/val.jsonl
     test: data/sft/test.jsonl
-
-  image_roots:
-    local: .
-    drive: /content/drive/MyDrive/rutilahu-vlm/data/mkn_img
 
   use_test_split: true
 
@@ -18,6 +22,6 @@ data:
   dataset_name: lfixfey/mkn_vlm_dataset
 
   hf_splits:
-    train: data/sft/train.jsonl
-    validation: data/sft/val.jsonl
-    test: data/sft/test.jsonl
+    train: data/sft_dataset/train.jsonl
+    validation: data/sft_dataset/val.jsonl
+    test: data/sft_dataset/test.jsonl

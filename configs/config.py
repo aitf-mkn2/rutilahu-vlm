@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
-import re
-
 
 def _load_yaml(path: Union[str, Path]) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
@@ -37,7 +35,7 @@ def _normalize_target_modules(value: Any) -> List[str]:
     """
     Mendukung:
     - list eksplisit
-    - string "all-linear" untuk Qwen/Qwen-like setup
+    - string "all-linear"
     """
     if value is None:
         return []
@@ -57,62 +55,10 @@ def _normalize_target_modules(value: Any) -> List[str]:
 
     return list(value)
 
-    import re
-
-
-def simplify_model_name(model_name: str) -> str:
-    """
-    Convert model name menjadi short readable key.
-
-    Contoh:
-    Qwen/Qwen3-VL-8B-Instruct
-    -> qwen3vl8b
-    """
-
-    model_key = model_name.split("/")[-1]
-    model_key = model_key.lower()
-
-    model_key = model_key.replace("-instruct", "")
-    model_key = model_key.replace("-", "")
-
-    return model_key
-
-
-def format_learning_rate(lr: float) -> str:
-    """
-    Convert learning rate ke compact scientific notation.
-
-    Contoh:
-    0.00002 -> 2e5
-    """
-
-    scientific = f"{lr:.0e}"
-
-    # 2e-05 -> 2e5
-    scientific = scientific.replace("e-0", "e")
-    scientific = scientific.replace("e-", "e")
-
-    return scientific
-
-
-def build_experiment_name(cfg) -> str:
-    """
-    Build automatic experiment name.
-
-    Format:
-    mkn2-<base_model>-lr<learning_rate>
-    """
-
-    model_key = simplify_model_name(cfg.base.model_name)
-    lr_key = format_learning_rate(cfg.experiment.learning_rate)
-
-    return f"mkn2-{model_key}-lr{lr_key}"
-
 
 @dataclass(frozen=True)
 class BaseConfig:
     model_name: str
-    output_dir: str
     seed: int
     hf_repo_id: str
     hf_private: bool
@@ -121,6 +67,7 @@ class BaseConfig:
 @dataclass(frozen=True)
 class DataConfig:
     source: str
+    dataset_roots: Dict[str, str]
     splits: Dict[str, str]
     image_roots: Dict[str, str]
     use_test_split: bool
@@ -129,6 +76,19 @@ class DataConfig:
     dataset_name: str
     hf_splits: Dict[str, str]
 
+    @property
+    def dataset_root(self) -> str:
+        """
+        Pilih dataset root berdasarkan source.
+        Dipakai untuk resolve path JSONL.
+        """
+        if self.source in self.dataset_roots:
+            return self.dataset_roots[self.source]
+
+        raise KeyError(
+            f"Dataset root for source `{self.source}` not found in `dataset_roots`."
+        )
+    
     @property
     def image_root(self) -> str:
         """
@@ -144,13 +104,14 @@ class DataConfig:
 
 @dataclass(frozen=True)
 class ExperimentConfig:
+    output_dir: str
     max_length: int
     num_train_epochs: float
     per_device_train_batch_size: int
     per_device_eval_batch_size: int
     gradient_accumulation_steps: int
     learning_rate: float
-    warmup_steps: int
+    warmup_ratio: float
     lr_scheduler_type: str
     logging_steps: int
     eval_steps: int
@@ -169,8 +130,8 @@ class ExperimentConfig:
     remove_unused_columns: bool
     overwrite_output_dir: bool
     report_to: List[str] = field(default_factory=list)
-    debug_first_batch: bool = True
-    run_name: Optional[str] = None
+    debug_first_batch: bool = False
+    run_name: str
     save_safetensors: bool = True
 
 
@@ -196,37 +157,6 @@ class SFTConfig:
     experiment: ExperimentConfig
     qlora: QLoRAConfig
 
-    @property
-    def experiment_name(self) -> str:
-        """
-        Auto-generate experiment name.
-
-        Example:
-        mkn2-qwen3vl8binstruct-lr2e5
-        """
-
-        model_name = self.base.model_name.split("/")[-1]
-
-        model_name = (
-            model_name.lower()
-            .replace("-", "")
-            .replace("_", "")
-        )
-
-        lr = self.experiment.learning_rate
-
-        lr_str = f"{lr:.0e}".replace("-", "")
-
-        return f"mkn2-{model_name}-lr{lr_str}"
-
-    @property
-    def image_root(self) -> str:
-        """
-        Active image root berdasarkan source dataset.
-        """
-
-        return self.data.image_roots[self.data.source]
-
     @classmethod
     def from_files(
         cls,
@@ -246,7 +176,6 @@ class SFTConfig:
 
         base = BaseConfig(
             model_name=_require(base_raw, "model_name", "base.yaml"),
-            output_dir=_require(base_raw, "output_dir", "base.yaml"),
             seed=int(_require(base_raw, "seed", "base.yaml")),
             hf_repo_id=str(_require(base_raw, "hf_repo_id", "base.yaml")),
             hf_private=bool(_require(base_raw, "hf_private", "base.yaml")),
@@ -254,6 +183,7 @@ class SFTConfig:
 
         data = DataConfig(
             source=str(_require(data_section, "source", "data.data")),
+            dataset_roots=dict(_require(data_section, "dataset_roots", "data.data")),
             splits=dict(_require(data_section, "splits", "data.data")),
             image_roots=dict(_require(data_section, "image_roots", "data.data")),
             use_test_split=bool(
@@ -274,7 +204,20 @@ class SFTConfig:
         )
 
         experiment = ExperimentConfig(
-            max_length=int(sft_section.get("max_length", 4096)),
+            output_dir=str(
+                _require(
+                sft_section,
+                "output_dir",
+                "experiment.sft"
+                )
+            ),
+            max_length=int(
+                _require(
+                sft_section,
+                "max_length",
+                "experiment.sft"
+                 )
+            ),
             num_train_epochs=float(
                 _require(sft_section, "num_train_epochs", "experiment.sft")
             ),
@@ -302,8 +245,8 @@ class SFTConfig:
             learning_rate=float(
                 _require(sft_section, "learning_rate", "experiment.sft")
             ),
-            warmup_steps=int(
-                _require(sft_section, "warmup_steps", "experiment.sft")
+            warmup_ratio=float(
+                _require(sft_section, "warmup_ratio", "experiment.sft")
             ),
             lr_scheduler_type=str(
                 _require(sft_section, "lr_scheduler_type", "experiment.sft")
@@ -352,10 +295,10 @@ class SFTConfig:
                 )
             ),
             bf16=bool(
-                sft_section.get("bf16", True)
+                _require(sft_section, "bf16", "experiment.sft")
             ),
             fp16=bool(
-                sft_section.get("fp16", False)
+                _require(sft_section, "fp16", "experiment.sft")
             ),
             optim=str(
                 _require(sft_section, "optim", "experiment.sft")
@@ -378,7 +321,11 @@ class SFTConfig:
                 sft_section.get("remove_unused_columns", False)
             ),
             overwrite_output_dir=bool(
-                sft_section.get("overwrite_output_dir", True)
+                _require(
+                    sft_section,
+                    "overwrite_output_dir",
+                    "experiment.sft"
+                )
             ),
             report_to=_normalize_report_to(
                 sft_section.get("report_to", "none")
@@ -386,7 +333,13 @@ class SFTConfig:
             debug_first_batch=bool(
                 sft_section.get("debug_first_batch", False)
             ),
-            run_name=sft_section.get("run_name"),
+            run_name=str(
+                _require(
+                sft_section,
+                "run_name",
+                "experiment.sft"
+                )
+            ),
             save_safetensors=bool(
                 sft_section.get("save_safetensors", True)
             ),
@@ -465,12 +418,17 @@ class SFTConfig:
 
     @property
     def output_dir(self) -> str:
-        return self.base.output_dir
+        return self.experiment.output_dir
 
     @property
     def seed(self) -> int:
         return self.base.seed
 
     @property
+    def dataset_root(self) -> str:
+        return self.data.dataset_root
+    
+    @property
     def image_root(self) -> str:
         return self.data.image_root
+

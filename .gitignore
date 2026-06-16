@@ -234,4 +234,4 @@ wandb/
 
 # test file
 test_*.py
-
+src/inference/
