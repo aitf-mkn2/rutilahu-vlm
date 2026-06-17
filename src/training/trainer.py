@@ -5,6 +5,7 @@ from unsloth.trainer import UnslothVisionDataCollator
 
 from trl import SFTConfig as TRLSFTConfig
 from trl import SFTTrainer
+from transformers import TrainerCallback, TrainerState, TrainerControl, TrainingArguments
 
 import torch
 import wandb
@@ -19,6 +20,79 @@ from src.data.dataset import MultimodalChatDataset
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+def _is_gdrive_accessible(gdrive_path: Path) -> bool:
+    """
+    Cek apakah Google Drive terhubung / dapat ditulis.
+    """
+    try:
+        gdrive_path = Path(gdrive_path).resolve()
+        # Di Google Colab, mount default di /content/drive.
+        # Jika user mengonfigurasi ke /content/drive/MyDrive/... tetapi Drive belum di-mount,
+        # folder /content/drive/MyDrive tidak akan ada.
+        if "/content/drive" in str(gdrive_path):
+            if not Path("/content/drive/MyDrive").exists():
+                return False
+        gdrive_path.mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def sync_to_gdrive(local_dir: Path, gdrive_dir: Path) -> None:
+    """
+    Menyalin file baru/berubah dan folder checkpoint dari local_dir ke gdrive_dir,
+    serta menghapus checkpoint lama di gdrive_dir jika sudah tidak ada di local_dir.
+    """
+    local_dir = Path(local_dir).resolve()
+    gdrive_dir = Path(gdrive_dir).resolve()
+
+    if not local_dir.exists():
+        return
+
+    gdrive_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Salin/Update file di root local_dir ke gdrive_dir
+    for item in local_dir.iterdir():
+        dest = gdrive_dir / item.name
+        if item.is_file():
+            if not dest.exists() or dest.stat().st_size != item.stat().st_size:
+                logger.info(f"Mengunggah file {item.name} ke Google Drive...")
+                shutil.copy2(item, dest)
+        elif item.is_dir() and item.name.startswith("checkpoint-"):
+            if not dest.exists():
+                logger.info(f"Mengunggah folder checkpoint {item.name} ke Google Drive...")
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+
+    # 2. Hapus checkpoint lama di Google Drive jika sudah dihapus secara lokal
+    local_checkpoints = {d.name for d in local_dir.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")}
+    if gdrive_dir.exists():
+        gdrive_checkpoints = {d.name for d in gdrive_dir.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")}
+        for old_checkpoint in (gdrive_checkpoints - local_checkpoints):
+            old_checkpoint_path = gdrive_dir / old_checkpoint
+            logger.info(f"Menghapus checkpoint usang {old_checkpoint} dari Google Drive...")
+            try:
+                shutil.rmtree(old_checkpoint_path, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Gagal menghapus checkpoint {old_checkpoint} di Google Drive: {e}")
+
+
+class GoogleDriveSyncCallback(TrainerCallback):
+    """
+    TrainerCallback untuk memicu sinkronisasi file checkpoint ke Google Drive setelah penyimpanan selesai.
+    """
+    def __init__(self, local_dir: Path, gdrive_dir: Path):
+        self.local_dir = Path(local_dir)
+        self.gdrive_dir = Path(gdrive_dir)
+
+    def on_save(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        logger.info("Memicu sinkronisasi checkpoint ke Google Drive...")
+        try:
+            sync_to_gdrive(self.local_dir, self.gdrive_dir)
+            logger.info("Sinkronisasi checkpoint ke Google Drive selesai.")
+        except Exception as e:
+            logger.error(f"Gagal menyinkronkan checkpoint ke Google Drive: {e}", exc_info=True)
 
 
 def _resolve_output_dir(cfg: AppConfig) -> Path:
@@ -245,6 +319,18 @@ def build_trainer(
         args=trainer_args,
     )
 
+    gdrive_output_dir = getattr(cfg.experiment, "gdrive_output_dir", None)
+    if gdrive_output_dir:
+        gdrive_path = Path(gdrive_output_dir)
+        if _is_gdrive_accessible(gdrive_path):
+            logger.info(f"Mendaftarkan GoogleDriveSyncCallback ke Drive: {gdrive_path}")
+            trainer.add_callback(GoogleDriveSyncCallback(output_dir, gdrive_path))
+        else:
+            logger.warning(
+                f"gdrive_output_dir diatur ke '{gdrive_output_dir}' tetapi Google Drive tidak dapat diakses "
+                "(apakah sudah di-mount?). Sinkronisasi checkpoint dinonaktifkan."
+            )
+
     return trainer
 
 
@@ -287,6 +373,17 @@ def save_training_artifacts(
 
     # save_model() juga akan memicu push ke Hub jika push_to_hub aktif.
     trainer.save_model(str(output_dir))
+
+    gdrive_output_dir = getattr(cfg.experiment, "gdrive_output_dir", None)
+    if gdrive_output_dir:
+        gdrive_path = Path(gdrive_output_dir)
+        if _is_gdrive_accessible(gdrive_path):
+            logger.info("Menyalin seluruh hasil akhir training (final model & artifacts) ke Google Drive...")
+            try:
+                sync_to_gdrive(output_dir, gdrive_path)
+                logger.info("Berhasil menyimpan seluruh artifacts ke Google Drive.")
+            except Exception as e:
+                logger.error(f"Gagal menyalin artifacts ke Google Drive: {e}", exc_info=True)
 
 
 def run_training(

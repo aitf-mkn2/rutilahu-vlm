@@ -1,6 +1,7 @@
 sft:
   run_name: mkn-sft-qwen3.5-9b-v0
   output_dir: outputs/mkn-sft-qwen3.5-9b-v0
+  gdrive_output_dir: /content/drive/MyDrive/rutilahu-vlm/outputs/mkn-sft-qwen3.5-9b-v0
   max_length: 4096
   num_train_epochs: 3
   per_device_train_batch_size: 4

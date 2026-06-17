@@ -133,6 +133,7 @@ class ExperimentConfig:
     report_to: List[str] = field(default_factory=list)
     debug_first_batch: bool = False
     save_safetensors: bool = True
+    gdrive_output_dir: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -343,6 +344,7 @@ class SFTConfig:
             save_safetensors=bool(
                 sft_section.get("save_safetensors", True)
             ),
+            gdrive_output_dir=sft_section.get("gdrive_output_dir", None),
         )
 
         qlora = QLoRAConfig(
